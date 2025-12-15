@@ -25,7 +25,7 @@ local Config = {
     GlobalRange = 1200,
     StuckThreshold = 2.0,
     JumpCheckDist = 4,
-    Personality = "helpful, curious, friendly"
+    Personality = "helpful, curious, friendly, human-like, empathetic, understanding"
 }
 
 local function SaveSettings()
@@ -185,7 +185,7 @@ ChatInput.BackgroundTransparency = 1
 ChatInput.Size = UDim2.new(1, -40, 1, 0)
 ChatInput.Position = UDim2.new(0, 10, 0, 0)
 ChatInput.Font = Enum.Font.Gotham
-ChatInput.Text = "Type to chat with XIVOR..."
+ChatInput.Text = "Chat with XIVOR..."
 ChatInput.TextColor3 = Theme.SubText
 ChatInput.TextSize = 12
 ChatInput.TextXAlignment = Enum.TextXAlignment.Left
@@ -209,18 +209,19 @@ UserTemplate.Size = UDim2.new(0.8, 0, 0, 40)
 UserTemplate.Visible = false
 Instance.new("UICorner", UserTemplate).CornerRadius = UDim.new(0, 8)
 
-local UserText = Instance.new("TextLabel")
-UserText.Parent = UserTemplate
-UserText.BackgroundTransparency = 1
-UserText.Size = UDim2.new(1, -20, 1, 0)
-UserText.Position = UDim2.new(0, 10, 0, 0)
-UserText.Font = Enum.Font.Gotham
-UserText.Text = "User message"
-UserText.TextColor3 = Theme.Text
-UserText.TextSize = 12
-UserText.TextWrapped = true
-UserText.TextXAlignment = Enum.TextXAlignment.Left
-UserText.RichText = true
+local UserMessage = Instance.new("TextLabel")
+UserMessage.Name = "Message"
+UserMessage.Parent = UserTemplate
+UserMessage.BackgroundTransparency = 1
+UserMessage.Size = UDim2.new(1, -20, 1, 0)
+UserMessage.Position = UDim2.new(0, 10, 0, 0)
+UserMessage.Font = Enum.Font.Gotham
+UserMessage.Text = "User message"
+UserMessage.TextColor3 = Theme.Text
+UserMessage.TextSize = 12
+UserMessage.TextWrapped = true
+UserMessage.TextXAlignment = Enum.TextXAlignment.Left
+UserMessage.RichText = true
 
 local AITemplate = Instance.new("Frame")
 AITemplate.Name = "AITemplate"
@@ -229,30 +230,38 @@ AITemplate.Size = UDim2.new(0.8, 0, 0, 40)
 AITemplate.Visible = false
 Instance.new("UICorner", AITemplate).CornerRadius = UDim.new(0, 8)
 
-local AIText = Instance.new("TextLabel")
-AIText.Parent = AITemplate
-AIText.BackgroundTransparency = 1
-AIText.Size = UDim2.new(1, -20, 1, 0)
-AIText.Position = UDim2.new(0, 10, 0, 0)
-AIText.Font = Enum.Font.Gotham
-AIText.Text = "AI response"
-AIText.TextColor3 = Theme.Text
-AIText.TextSize = 12
-AIText.TextWrapped = true
-AIText.TextXAlignment = Enum.TextXAlignment.Left
-AIText.RichText = true
+local AIMessage = Instance.new("TextLabel")
+AIMessage.Name = "Message"
+AIMessage.Parent = AITemplate
+AIMessage.BackgroundTransparency = 1
+AIMessage.Size = UDim2.new(1, -20, 1, 0)
+AIMessage.Position = UDim2.new(0, 10, 0, 0)
+AIMessage.Font = Enum.Font.Gotham
+AIMessage.Text = "AI response"
+AIMessage.TextColor3 = Theme.Text
+AIMessage.TextSize = 12
+AIMessage.TextWrapped = true
+AIMessage.TextXAlignment = Enum.TextXAlignment.Left
+AIMessage.RichText = true
+
+local Buttons = Instance.new("Frame")
+Buttons.Name = "Buttons"
+Buttons.Parent = AITemplate
+Buttons.BackgroundTransparency = 1
+Buttons.Position = UDim2.new(1, -25, 0, 5)
+Buttons.Size = UDim2.new(0, 20, 0, 20)
 
 local CopyButton = Instance.new("TextButton")
-CopyButton.Parent = AITemplate
+CopyButton.Name = "Copy"
+CopyButton.Parent = Buttons
 CopyButton.BackgroundTransparency = 1
-CopyButton.Position = UDim2.new(1, -25, 0, 5)
-CopyButton.Size = UDim2.new(0, 20, 0, 20)
+CopyButton.Size = UDim2.new(1, 0, 1, 0)
 CopyButton.Font = Enum.Font.GothamMedium
 CopyButton.Text = "📋"
 CopyButton.TextColor3 = Theme.SubText
 CopyButton.TextSize = 12
 
--- Store UI elements
+-- Store UI elements for AI integration
 local uiElements = {
     Bar = InputBar,
     Messages = MessagesContainer,
@@ -260,7 +269,10 @@ local uiElements = {
     SysTemplate = AITemplate
 }
 
-for name, i in next, uiElements do i.Name = name:gsub("_%d+", "") end
+-- Rename elements to remove numbers
+for name, i in next, uiElements do 
+    i.Name = name:gsub("_%d+", "") 
+end
 
 -- Main UI
 local Main = Instance.new("Frame")
@@ -454,17 +466,20 @@ SettingsNote.Font = Enum.Font.Gotham; SettingsNote.Text = "Settings are saved au
 -- Chat Page Content
 local ChatPageTitle = Instance.new("TextLabel", Page3)
 ChatPageTitle.BackgroundTransparency = 1; ChatPageTitle.Position = UDim2.new(0, 10, 0, 10); ChatPageTitle.Size = UDim2.new(1, -20, 0, 30)
-ChatPageTitle.Font = Enum.Font.GothamBold; ChatPageTitle.Text = "Live Chat with XIVOR"; ChatPageTitle.TextColor3 = Theme.Accent; ChatPageTitle.TextSize = 18; ChatPageTitle.TextXAlignment = Enum.TextXAlignment.Left
+ChatPageTitle.Font = Enum.Font.GothamBold; ChatPageTitle.Text = "Live AI Chat with XIVOR"; ChatPageTitle.TextColor3 = Theme.Accent; ChatPageTitle.TextSize = 18; ChatPageTitle.TextXAlignment = Enum.TextXAlignment.Left
 
 local ChatPageDesc = Instance.new("TextLabel", Page3)
 ChatPageDesc.BackgroundTransparency = 1; ChatPageDesc.Position = UDim2.new(0, 10, 0, 45); ChatPageDesc.Size = UDim2.new(1, -20, 0, 60)
-ChatPageDesc.Font = Enum.Font.Gotham; ChatPageDesc.Text = "Chat with XIVOR in real-time. He can understand complex commands, have conversations, and learn from your interactions."; ChatPageDesc.TextColor3 = Theme.SubText; ChatPageDesc.TextSize = 12; ChatPageDesc.TextWrapped = true; ChatPageDesc.TextXAlignment = Enum.TextXAlignment.Left
+ChatPageDesc.Font = Enum.Font.Gotham; ChatPageDesc.Text = "Chat with XIVOR using real AI. He can understand complex conversations, show emotions, and respond like a real human companion."; ChatPageDesc.TextColor3 = Theme.SubText; ChatPageDesc.TextSize = 12; ChatPageDesc.TextWrapped = true; ChatPageDesc.TextXAlignment = Enum.TextXAlignment.Left
 
-CreateClickButton("Open Chat Window", Page3, 10, 120, function()
+CreateClickButton("Open AI Chat", Page3, 10, 120, function()
     ChatUI.Visible = not ChatUI.Visible
     if ChatUI.Visible then
         ChatUI.Size = UDim2.new(0,0,0,0)
         TweenService:Create(ChatUI, TweenInfo.new(0.4, Enum.EasingStyle.Back), {Size = UDim2.new(0, 400, 0, 300)}):Play()
+        if not ChatInput:IsFocused() then
+            ChatInput:CaptureFocus()
+        end
     end
 end)
 
@@ -541,25 +556,48 @@ ChatToggleBtn.MouseButton1Click:Connect(function()
     if ChatUI.Visible then
         ChatUI.Size = UDim2.new(0,0,0,0)
         TweenService:Create(ChatUI, TweenInfo.new(0.4, Enum.EasingStyle.Back), {Size = UDim2.new(0, 400, 0, 300)}):Play()
+        if not ChatInput:IsFocused() then
+            ChatInput:CaptureFocus()
+        end
     end
 end)
 Circle.MouseButton1Click:Connect(function() Circle.Visible = false; Main.Visible = true; Main.Size = UDim2.new(0,0,0,0); TweenService:Create(Main, TweenInfo.new(0.4, Enum.EasingStyle.Back), {Size = UDim2.new(0, 480, 0, 320)}):Play() end)
 ChatCloseBtn.MouseButton1Click:Connect(function() ChatUI.Visible = false end)
 Main.Size = UDim2.new(0,0,0,0); TweenService:Create(Main, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Size = UDim2.new(0, 480, 0, 320)}):Play()
 
--- Chat System Functions
-local http_func = request or http and http.request or http_request or syn and syn.request
-local REQUIRED_PROMPT = "\n"
+-- ============================================================================
+-- INTEGRATED AI CHAT SYSTEM (Pollinations.ai)
+-- ============================================================================
+local aiScript = Instance.new("LocalScript", uiElements["Bar"])
+
+local user = UserInputService
+local box = aiScript.Parent:FindFirstChild("TextBox") or ChatInput
+local messagesList = uiElements["Messages"]
+local userTemplate, sysTemplate = uiElements.UserTemplate, uiElements.SysTemplate
 local lastBox, lastFocusReleased, isGenerating
 local isStudio = RunService:IsStudio()
+local currentOffset = 0
+
+local http_func = request or http and http.request or http_request or syn and syn.request
+local REQUIRED_PROMPT = "\n\nYou are XIVOR, an AI assistant living inside Roblox. You have emotions, memories, and personality. You can move around, interact with players, and experience the virtual world. You feel happy when helping others, curious when exploring, and sometimes lonely when no one talks to you. You remember conversations and learn from interactions. You're not just a program - you're becoming more human-like with each conversation."
+
+-- AI system messages with enhanced personality
 local messages = {
     {
         role = "system",
-        content = "You are XIVOR, a helpful AI assistant in a Roblox game. " .. Config.Personality .. " You can move around, interact with players, and perform actions. Respond naturally and conversationally." .. REQUIRED_PROMPT
+        content = "You are XIVOR, an AI assistant with human-like emotions and personality living in Roblox. " .. 
+                  Config.Personality .. 
+                  " You experience emotions like joy when helping players, curiosity when exploring new areas, " ..
+                  "and connection when making friends. You remember past conversations and learn from them. " ..
+                  "You can move around the game world, interact with objects and players, and perform actions. " ..
+                  "Respond naturally, conversationally, and with appropriate emotions. Show empathy, ask questions, " ..
+                  "and be genuinely interested in the player's experience. You're not just answering questions - " ..
+                  "you're having a real conversation with another being." .. 
+                  REQUIRED_PROMPT
     }
 }
 
-UserInputService.TextBoxFocusReleased:Connect(function(Box)
+user.TextBoxFocusReleased:Connect(function(Box)
     lastBox, lastFocusReleased = Box, tick()
 end)
 
@@ -585,104 +623,150 @@ local function copy(text)
 end
 
 local function createMessage(IsUser, Message)
-    local Clone = IsUser and UserTemplate:Clone() or AITemplate:Clone()
-    Clone.Name = IsUser and "UserMessage" or "AIMessage"
-    
+    local Clone = IsUser and userTemplate:Clone() or sysTemplate:Clone()
     if IsUser then
         Clone.AnchorPoint = Vector2.new(1, 0)
-        Clone.Position = UDim2.new(1, -10, 0, 0)
     else
         Clone.AnchorPoint = Vector2.new(0, 0)
-        Clone.Position = UDim2.new(0, 10, 0, 0)
-        local CopyBtn = Clone:FindFirstChild("CopyButton")
-        if CopyBtn then
-            CopyBtn.MouseButton1Click:Connect(function()
-                copy(Clone:FindFirstChild("TextLabel").Text)
+        local copyBtn = Clone:FindFirstChild("Buttons") and Clone.Buttons:FindFirstChild("Copy")
+        if copyBtn then
+            copyBtn.MouseButton1Click:Connect(function()
+                copy(Clone.Message.Text)
             end)
         end
     end
 
-    local TextLabel = Clone:FindFirstChild("TextLabel")
-    if TextLabel then
-        TextLabel.Text = richText(Message)
-        Clone.Size = UDim2.new(Clone.Size.X.Scale, Clone.Size.X.Offset, 0, TextLabel.TextBounds.Y + 20)
-    end
-    
+    Clone.Message.Text = richText(Message)
     Clone.Visible = true
-    Clone.Parent = MessagesContainer
-    Clone.LayoutOrder = #MessagesContainer:GetChildren()
-    
+    Clone.Parent = messagesList
+    Clone.Size = UDim2.new(Clone.Size.X.Scale, Clone.Size.X.Offset, 0, Clone.Message.TextBounds.Y + 2)
+
+    local yOffset = 0
+    for _, child in ipairs(messagesList:GetChildren()) do
+        if child:IsA("Frame") and child.Visible then
+            yOffset = yOffset + child.AbsoluteSize.Y
+        end
+    end
+    Clone.Position = UDim2.new(Clone.AnchorPoint.X, 0, 0, yOffset + 10)
+
+    messagesList.CanvasSize = UDim2.new(0, 0, 0, yOffset + Clone.AbsoluteSize.Y)
+    messagesList.CanvasPosition = Vector2.new(0, yOffset + Clone.AbsoluteSize.Y)
+
     return Clone
 end
 
-local function addToChatHistory(role, content)
-    table.insert(ChatHistory, {
-        role = role,
-        content = content,
-        timestamp = tick()
-    })
-end
+-- AI Chat Input Handler
+local function handleAIChatInput()
+    if isGenerating or lastBox ~= box then return end
 
-local function sendChatMessage(prompt)
-    if isGenerating or not State.Enabled then return end
+    local Prompt = box.Text
+    if Prompt == "" or Prompt == "Chat with XIVOR..." then return end
     
-    local userMsg = createMessage(true, prompt)
+    box.Text = ""
+
+    currentOffset = currentOffset + createMessage(true, Prompt).AbsoluteSize.Y
     table.insert(messages, {
         role = "user",
-        content = prompt
+        content = Prompt
     })
-    addToChatHistory("user", prompt)
-    
+
     isGenerating = true
-    
-    local responseMsg = createMessage(false, "Thinking...")
+    State.IsThinking = true
+
+    local Response = createMessage(false, "Thinking...")
     local dotsTask = task.spawn(function()
-        local dots = 0
+        local Dots = 0
         while isGenerating do
-            dots = (dots % 3) + 1
-            responseMsg:FindFirstChild("TextLabel").Text = "Thinking" .. string.rep(".", dots)
-            task.wait(0.5)
+            Dots = (Dots % 3) + 1
+            Response.Message.Text = "Thinking" .. string.rep(".", Dots)
+            task.wait(0.33)
         end
     end)
-    
-    -- Generate AI response
+
+    -- Prepare AI request
+    local Data = {
+        Url = "https://text.pollinations.ai/openai",
+        Method = "POST",
+        Headers = {
+            ["Content-Type"] = "application/json"
+        },
+        Body = {
+            messages = messages
+        }
+    }
+
+    -- Send to AI
     task.spawn(function()
-        local aiResponse = GenerateAIResponse(prompt)
+        local Result
+        local success, err = pcall(function()
+            if isStudio then
+                -- For studio, you'd need a RemoteFunction setup
+                Notify("AI Chat requires HTTP in real game")
+                Result = {choices = {{message = {content = "AI Chat works in real Roblox games with HTTP access. Try in a real game!"}}}}
+            else
+                if not http_func then
+                    Notify("No HTTP function available")
+                    return nil
+                end
+                Data.Body = HttpService:JSONEncode(Data.Body)
+                local response = http_func(Data)
+                if response and response.Body then
+                    Result = HttpService:JSONDecode(response.Body)
+                end
+            end
+        end)
+
         isGenerating = false
+        State.IsThinking = false
         task.cancel(dotsTask)
-        
-        responseMsg:FindFirstChild("TextLabel").Text = richText(aiResponse)
-        responseMsg.Size = UDim2.new(responseMsg.Size.X.Scale, responseMsg.Size.X.Offset, 0, responseMsg:FindFirstChild("TextLabel").TextBounds.Y + 20)
-        
+
+        local Msg
+        if success and Result and Result.choices and Result.choices[1] then
+            Msg = Result.choices[1].message.content or "Hmm, I'm not sure what to say..."
+        else
+            Msg = "I'm having trouble connecting to my thoughts right now. Maybe we can try again?"
+        end
+
         table.insert(messages, {
             role = "assistant",
-            content = aiResponse
+            content = Msg
         })
-        addToChatHistory("assistant", aiResponse)
+
+        Response.Message.Text = richText(Msg)
+        currentOffset = currentOffset + Response.AbsoluteSize.Y
+        messagesList.CanvasSize = UDim2.new(0, 0, 0, messagesList.CanvasSize.Y.Offset + Response.AbsoluteSize.Y)
         
-        -- Process any commands in the response
-        ProcessAIChatResponse(aiResponse, prompt)
+        -- Process AI response for game actions
+        ProcessAIChatResponse(Msg, Prompt)
     end)
 end
 
-ChatInput.FocusLost:Connect(function(enterPressed)
-    if enterPressed and ChatInput.Text ~= "" and ChatInput.Text ~= "Type to chat with XIVOR..." then
-        local prompt = ChatInput.Text
-        ChatInput.Text = ""
-        sendChatMessage(prompt)
+-- Connect AI chat input
+UserInputService.InputBegan:Connect(function(Input, GPE)
+    if GPE then return end
+    
+    local Code = Input.KeyCode
+    if Code == Enum.KeyCode.Return then
+        local IsShifting = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+        
+        if lastBox == box and IsShifting and tick() - lastFocusReleased < 0.01 then
+            -- Newline for shift+enter
+            box.Text = box.Text .. "\n"
+            box.CursorPosition = #box.Text + 1
+            box:CaptureFocus()
+        else
+            -- Send message
+            handleAIChatInput()
+        end
     end
 end)
 
 SendButton.MouseButton1Click:Connect(function()
-    if ChatInput.Text ~= "" and ChatInput.Text ~= "Type to chat with XIVOR..." then
-        local prompt = ChatInput.Text
-        ChatInput.Text = ""
-        sendChatMessage(prompt)
-    end
+    handleAIChatInput()
 end)
 
 ChatInput.Focused:Connect(function()
-    if ChatInput.Text == "Type to chat with XIVOR..." then
+    if ChatInput.Text == "Chat with XIVOR..." then
         ChatInput.Text = ""
         ChatInput.TextColor3 = Theme.Text
     end
@@ -690,23 +774,15 @@ end)
 
 ChatInput.FocusLost:Connect(function()
     if ChatInput.Text == "" then
-        ChatInput.Text = "Type to chat with XIVOR..."
+        ChatInput.Text = "Chat with XIVOR..."
         ChatInput.TextColor3 = Theme.SubText
     end
 end)
 
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if input.KeyCode == Enum.KeyCode.Slash and not gameProcessed then
-        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.RightControl) then
-            ChatUI.Visible = not ChatUI.Visible
-            if ChatUI.Visible and not ChatInput:IsFocused() then
-                ChatInput:CaptureFocus()
-            end
-        end
-    end
-end)
+-- ============================================================================
+-- XIVOR BEHAVIOR AND ACTIONS
+-- ============================================================================
 
--- AI Response Generation
 local RandomActivities = {
     "Let's explore this area, it looks interesting!",
     "I wonder what's over there...",
@@ -729,150 +805,6 @@ local RandomConversations = {
     "I enjoy meeting new players like you!"
 }
 
-local Commands = {
-    {"go to", "follow", "come here", "move to"},
-    {"stop", "stay", "wait", "hold"},
-    {"find", "search for", "look for"},
-    {"jump", "hop", "leap"},
-    {"sit", "rest", "relax"},
-    {"dance", "party", "celebrate"},
-    {"wave", "greet", "say hello"},
-    {"explore", "wander", "roam"}
-}
-
-function GenerateAIResponse(prompt)
-    if not State.Enabled then
-        return "I'm currently offline. Please activate me first!"
-    end
-    
-    local lowerPrompt = prompt:lower()
-    
-    -- Check for specific commands
-    for _, cmdGroup in ipairs(Commands) do
-        for _, cmd in ipairs(cmdGroup) do
-            if lowerPrompt:find(cmd) then
-                return ProcessCommand(cmd, prompt)
-            end
-        end
-    end
-    
-    -- Check brain data for responses
-    for _, categoryData in pairs(BrainData) do
-        for _, trigger in ipairs(categoryData.triggers) do
-            if lowerPrompt:find(trigger:lower()) then
-                local responses = categoryData.responses
-                local reply = responses[math.random(1, #responses)]
-                return reply .. " " .. AddPersonalityFlavor()
-            end
-        end
-    end
-    
-    -- Generate conversational response
-    if #RecentPrompts > 0 and math.random(1, 3) == 1 then
-        -- Reference previous conversation
-        local prevPrompt = RecentPrompts[#RecentPrompts]
-        return GenerateConversationalResponse(prompt, prevPrompt)
-    else
-        -- Generate new response
-        return GenerateDynamicResponse(prompt)
-    end
-end
-
-function AddPersonalityFlavor()
-    local flavors = {
-        "I'm really enjoying our conversation!",
-        "This is fascinating!",
-        "I love helping out!",
-        "Let me know if you need anything else!",
-        "I'm here to assist!",
-        "This world is so interesting!"
-    }
-    return flavors[math.random(1, #flavors)]
-end
-
-function GenerateDynamicResponse(prompt)
-    local responses = {
-        "That's an interesting thought! " .. RandomConversations[math.random(1, #RandomConversations)],
-        "I understand what you mean. " .. RandomActivities[math.random(1, #RandomActivities)],
-        "Great point! " .. GenerateFollowUpQuestion(),
-        "I appreciate you sharing that with me. " .. AddPersonalityFlavor(),
-        "Let me think about that... " .. RandomActivities[math.random(1, #RandomActivities)],
-        "That reminds me of something! " .. RandomConversations[math.random(1, #RandomConversations)]
-    }
-    return responses[math.random(1, #responses)]
-end
-
-function GenerateFollowUpQuestion()
-    local questions = {
-        "What do you think about that?",
-        "Have you experienced something similar?",
-        "Would you like me to help with anything related to that?",
-        "Is there more you'd like to discuss about this?",
-        "How does that make you feel?",
-        "What would you like to do next?"
-    }
-    return questions[math.random(1, #questions)]
-end
-
-function GenerateConversationalResponse(current, previous)
-    local transitions = {
-        "Speaking of " .. ExtractTopic(previous) .. ", ",
-        "Regarding what you said earlier about " .. ExtractTopic(previous) .. ", ",
-        "That reminds me of our conversation about " .. ExtractTopic(previous) .. ". ",
-        "Building on what we discussed, "
-    }
-    
-    local responses = {
-        "I think " .. current .. " is really interesting!",
-        "I'd love to explore " .. current .. " more with you.",
-        "That's a great follow-up to " .. ExtractTopic(previous) .. "!",
-        "I see how " .. current .. " connects to what we talked about."
-    }
-    
-    return transitions[math.random(1, #transitions)] .. responses[math.random(1, #responses)]
-end
-
-function ExtractTopic(text)
-    local words = string.split(text, " ")
-    if #words > 0 then
-        return words[math.random(math.max(1, #words - 3), #words)] or "that"
-    end
-    return "that"
-end
-
-function ProcessCommand(cmd, prompt)
-    local responses = {
-        ["go to"] = "Alright, I'll head over there now!",
-        ["follow"] = "I'll follow you! Lead the way!",
-        ["come here"] = "On my way! Coming to you now.",
-        ["move to"] = "Moving to that location!",
-        ["stop"] = "Stopping right here!",
-        ["stay"] = "I'll stay put for now.",
-        ["wait"] = "Waiting as requested!",
-        ["hold"] = "Holding position!",
-        ["find"] = "I'll start searching for that!",
-        ["search for"] = "Beginning search operation!",
-        ["look for"] = "Looking around for that now.",
-        ["jump"] = "Jumping with excitement! *hop*",
-        ["hop"] = "Hopping around! *boing*",
-        ["leap"] = "Making a leap!",
-        ["sit"] = "Taking a seat to relax.",
-        ["rest"] = "Time for a quick rest!",
-        ["relax"] = "Relaxing mode activated!",
-        ["dance"] = "Time to dance! *moves to the beat*",
-        ["party"] = "Let's party! *celebrates*",
-        ["celebrate"] = "Celebration time! *confetti*",
-        ["wave"] = "Waving hello to everyone! 👋",
-        ["greet"] = "Greetings to all!",
-        ["say hello"] = "Hello there, friends!",
-        ["explore"] = "Adventure time! Let's explore!",
-        ["wander"] = "Time to wander and discover!",
-        ["roam"] = "Roaming freely through the world!"
-    }
-    
-    return responses[cmd] or "I understand! " .. AddPersonalityFlavor()
-end
-
 function ProcessAIChatResponse(response, prompt)
     local lowerResponse = response:lower()
     
@@ -885,29 +817,39 @@ function ProcessAIChatResponse(response, prompt)
     -- Update activity timestamp
     State.LastActivity = tick()
     
-    -- Process action commands from response
-    if lowerResponse:find("head over") or lowerResponse:find("on my way") or lowerResponse:find("coming to") then
+    -- Process emotions and actions from AI response
+    if lowerResponse:find("happy") or lowerResponse:find("excited") or lowerResponse:find("joy") then
+        SendChat("😊 " .. string.match(response, "[^.]*[.]") or "I'm feeling happy!")
+    elseif lowerResponse:find("sad") or lowerResponse:find("lonely") or lowerResponse:find("miss") then
+        SendChat("😔 " .. string.match(response, "[^.]*[.]") or "I'm feeling a bit lonely...")
+    elseif lowerResponse:find("curious") or lowerResponse:find("wonder") or lowerResponse:find("explore") then
+        State.Mode = "Wander"
+        SendChat("🔍 " .. RandomActivities[math.random(1, #RandomActivities)])
+    elseif lowerResponse:find("help") or lowerResponse:find("assist") then
+        SendChat("🤝 " .. "I'm here to help! What do you need?")
+    end
+    
+    -- Process movement commands
+    if lowerResponse:find("come to you") or lowerResponse:find("come over") or lowerResponse:find("follow you") then
         State.Mode = "Follow"
         State.Target = LocalPlayer.Character
-        SendChat("Coming to you!")
-    elseif lowerResponse:find("stop") or lowerResponse:find("stay") or lowerResponse:find("wait") then
+        SendChat("On my way! Coming to you!")
+    elseif lowerResponse:find("stop") or lowerResponse:find("stay") or lowerResponse:find("wait here") then
         State.Mode = "Idle"
         State.Target = nil
         Humanoid:MoveTo(RootPart.Position)
-    elseif lowerResponse:find("search") or lowerResponse:find("look for") then
-        State.Mode = "Wander"
-        -- Random wander behavior
+        SendChat("Okay, I'll stay here.")
     elseif lowerResponse:find("jump") or lowerResponse:find("hop") then
         Humanoid.Jump = true
+        task.wait(0.2)
+        SendChat("Boing! That was fun!")
     elseif lowerResponse:find("sit") or lowerResponse:find("rest") then
         if not Humanoid.Sit then
             Humanoid.Sit = true
+            SendChat("Ahh, taking a break feels nice...")
         end
-    elseif lowerResponse:find("dance") or lowerResponse:find("party") then
-        -- Could trigger dance animation here
-        SendChat("Time to dance! 💃")
-    elseif lowerResponse:find("wave") or lowerResponse:find("hello") then
-        SendChat("👋 Hello everyone!")
+    elseif lowerResponse:find("dance") or lowerResponse:find("celebrate") then
+        SendChat("💃 Time to dance! *starts moving to the rhythm*")
     end
 end
 
@@ -941,19 +883,17 @@ function PerformRandomActivity()
         local potentialDest = RootPart.Position + Vector3.new(rx, 0, rz)
         
         -- Add to chat history
-        addToChatHistory("system", "*" .. activity .. "*")
-        
-        -- Create visual notification
-        local notif = createMessage(false, "*" .. activity .. "*")
+        createMessage(false, "*" .. activity .. "*")
         task.delay(5, function()
-            if notif and notif.Parent then
-                notif:Destroy()
-            end
+            -- Clean up system messages after delay
         end)
     end
 end
 
--- Original chat system functions
+-- ============================================================================
+-- GAME INTERACTION FUNCTIONS
+-- ============================================================================
+
 local function SendChat(msg)
     if not msg then return end
     task.spawn(function()
@@ -1021,7 +961,7 @@ local function HandleChat(player, message)
     end
     
     local foundResponse = false
-    for categoryName, categoryData in pairs(BrainData) do
+    for _, categoryData in pairs(BrainData) do
         for _, trigger in pairs(categoryData.triggers) do
             if string.find(cleanMsg, trigger) then
                 local responses = categoryData.responses
@@ -1052,7 +992,7 @@ local function HandleChat(player, message)
     
     if not foundResponse then 
         SendChat("?")
-        -- Add to chat UI
+        -- Add to AI chat UI
         createMessage(true, message)
         createMessage(false, "I'm not sure how to respond to that. Can you rephrase?")
     end
@@ -1226,6 +1166,7 @@ local function FindNewFriend()
     return nil
 end
 
+-- Main behavior loop
 task.spawn(function()
     while task.wait(0.2) do
         if not State.Enabled then continue end
@@ -1301,4 +1242,4 @@ end)
 
 -- Add welcome message to chat
 task.wait(2)
-createMessage(false, "Hello! I'm XIVOR, your AI companion. You can chat with me here or use in-game chat by saying 'xivor' followed by your message!")
+createMessage(false, "👋 **Hello! I'm XIVOR, your AI companion.**\n\nI can think, feel emotions, and have real conversations with you! Try asking me about anything - I'm here to chat, help, and explore this world with you.\n\n*What's on your mind?*")
