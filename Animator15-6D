@@ -1,19 +1,21 @@
---//====================================================================\\--
---||                Animator6D Pro V4 (R6/R15)                          ||--
---||  Author: "gObl00x" Credits to him                                  ||--
---||  Features: universal rig, local cache, safe play                   ||--
---||                                                                    ||
---\\====================================================================//--
+--//====================================================\\--
+--||                Animator6D Pro V4 (R6/R15)          ||--
+--||  Author: gObl00x + GPT-5                          ||--
+--||  Features: universal rig, local cache, safe play   ||--
+--|| Ya sorry, I dont want to die cuz writing this shit on a shitty phone for 90 years, thanks GPT
+--\\====================================================//--
 
 if getgenv().Animator6DLoadedPro then return end
 getgenv().Animator6DLoadedPro = true
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 
 local player = Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
 local hum = character:WaitForChild("Humanoid")
+local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
 
 -- ========== LOCAL CACHE / 403 EVASION ==========
 local LocalAssetCache = {}
@@ -92,6 +94,15 @@ local R15Map = {
 	["RightFoot"] = "RightAnkle"
 }
 
+-- Alternative mapping for different naming conventions
+local R15MapAlt = {
+	["Torso"] = "Waist",
+	["Left Arm"] = "LeftShoulder",
+	["Right Arm"] = "RightShoulder",
+	["Left Leg"] = "LeftHip",
+	["Right Leg"] = "RightHip"
+}
+
 -- ========== KEYFRAME PARSER ==========
 local function ConvertToTable(kfs)
 	if not (kfs and typeof(kfs) == "Instance" and kfs:IsA("KeyframeSequence")) then
@@ -112,7 +123,12 @@ local function ConvertToTable(kfs)
 		local entry = { Time = frame.Time, Data = {} }
 		for _, pose in ipairs(frame:GetDescendants()) do
 			if pose:IsA("Pose") and pose.Weight > 0 then
-				entry.Data[pose.Name] = { CFrame = pose.CFrame }
+				-- Check if this is a root pose (affects character position)
+				local isRootPose = pose.Name == "HumanoidRootPart" or pose.Name == "Torso" or pose.Name == "LowerTorso" or pose.Name == "UpperTorso"
+				entry.Data[pose.Name] = { 
+					CFrame = pose.CFrame,
+					IsRoot = isRootPose
+				}
 			end
 		end
 		table.insert(seq, entry)
@@ -182,6 +198,98 @@ local function ApplyR15Limits(motor, origC0, dataCFrame)
 	return origC0 * dataCFrame
 end
 
+-- ========== MOVEMENT CONTROLLER ==========
+local MovementController = {}
+MovementController.__index = MovementController
+
+function MovementController.new(character, hum, rootPart)
+	local self = setmetatable({}, MovementController)
+	self.character = character
+	self.hum = hum
+	self.rootPart = rootPart
+	self.originalWalkSpeed = hum.WalkSpeed
+	self.originalJumpPower = hum.JumpPower
+	self.originalAutoRotate = hum.AutoRotate
+	self.isMoving = false
+	self.targetPosition = nil
+	self.startPosition = nil
+	self.movementStartTime = 0
+	self.movementDuration = 0
+	self.lastVelocity = Vector3.new()
+	
+	-- Store original humanoid state
+	self.originalState = {
+		PlatformStand = hum.PlatformStand,
+		SeatPart = hum.SeatPart
+	}
+	
+	return self
+end
+
+function MovementController:EnableRootMovement()
+	-- Disable auto-rotate for precise control
+	self.hum.AutoRotate = false
+	
+	-- Allow root movement
+	self.hum:ChangeState(Enum.HumanoidStateType.RunningNoPhysics)
+	
+	-- Disable platform stand
+	self.hum.PlatformStand = false
+	
+	-- Store original position
+	self.originalPosition = self.rootPart.Position
+end
+
+function MovementController:DisableRootMovement()
+	-- Restore auto-rotate
+	self.hum.AutoRotate = self.originalAutoRotate
+	
+	-- Re-enable normal physics
+	self.hum:ChangeState(Enum.HumanoidStateType.Running)
+	
+	-- Restore platform stand state
+	self.hum.PlatformStand = self.originalState.PlatformStand
+	
+	self.isMoving = false
+	self.targetPosition = nil
+	self.startPosition = nil
+end
+
+function MovementController:ApplyRootMovement(rootCFrame, deltaTime)
+	if not self.rootPart then return end
+	
+	-- Extract position and rotation from root CFrame
+	local position = rootCFrame.Position
+	local rotation = rootCFrame.Rotation
+	
+	-- Apply rotation to root part
+	self.rootPart.CFrame = CFrame.new(self.rootPart.Position) * rotation
+	
+	-- Calculate velocity for smooth movement
+	local targetVelocity = (position - self.rootPart.Position) / deltaTime
+	
+	-- Apply velocity with smoothing
+	local smoothedVelocity = self.lastVelocity:Lerp(targetVelocity, 0.5)
+	
+	-- Apply velocity to root part
+	self.rootPart.Velocity = smoothedVelocity
+	
+	-- Store for next frame
+	self.lastVelocity = smoothedVelocity
+	
+	-- Also apply to humanoid for collision
+	self.hum:Move(self.rootPart.Velocity)
+end
+
+function MovementController:Cleanup()
+	self:DisableRootMovement()
+	if self.hum then
+		self.hum.WalkSpeed = self.originalWalkSpeed
+		self.hum.JumpPower = self.originalJumpPower
+		self.hum.AutoRotate = self.originalAutoRotate
+	end
+end
+
 -- ========== ANIM PLAYER ==========
 local AnimPlayer = {}
 AnimPlayer.__index = AnimPlayer
@@ -196,6 +304,12 @@ function AnimPlayer.new(rig, kfs)
 	self.speed = 1
 	self.isR15 = IsR15(rig)
 	self.savedC0 = {}
+	
+	-- Initialize movement controller
+	self.movementController = MovementController.new(character, hum, humanoidRootPart)
+	
+	-- Find root motor
+	self.rootMotor = self.map["RootJoint"] or self.map["Root"] or self.map["root"]
 	
 	-- Save original C0 values
 	for _, m in pairs(self.map) do
@@ -217,6 +331,14 @@ function AnimPlayer.new(rig, kfs)
 				end
 			end
 		end
+		
+		-- Find additional root parts for R15
+		self.r15RootPart = rig:FindFirstChild("HumanoidRootPart") or rig:FindFirstChild("LowerTorso") or rig:FindFirstChild("UpperTorso")
+	end
+	
+	-- Store original root part state
+	if humanoidRootPart then
+		self.originalRootCFrame = humanoidRootPart.CFrame
 	end
 	
 	return self
@@ -226,14 +348,32 @@ function AnimPlayer:Play(speed, loop)
 	if self.playing then return end
 	self.playing, self.speed = true, speed or 1
 	self.looped = (loop == nil) and true or loop
+	
+	-- Enable root movement if supported
+	self.movementController:EnableRootMovement()
+	
+	-- Store start time for root movement
+	self.startTime = tick()
+	self.lastFrameTime = tick()
+	
+	-- Track previous root CFrame for delta calculation
+	self.prevRootCFrame = nil
+	self.accumulatedRootDelta = CFrame.new()
 
 	self.conn = RunService.Heartbeat:Connect(function(dt)
 		if not self.playing then return end
+		
+		local currentTime = tick()
+		local frameDelta = currentTime - self.lastFrameTime
+		self.lastFrameTime = currentTime
+		
 		self.time += dt * self.speed
 
 		if self.time > self.length then
 			if self.looped then
 				self.time -= self.length
+				-- Reset root delta on loop
+				self.accumulatedRootDelta = CFrame.new()
 			else
 				self:Stop(true)
 				return
@@ -249,33 +389,111 @@ function AnimPlayer:Play(speed, loop)
 			end
 		end
 
+		-- Track if we have root movement this frame
+		local hasRootMovement = false
+		local rootCFrame = nil
+		
 		for joint, data in pairs(prev.Data) do
 			local motor = FindMotor(joint, self.map, self.lower, self.isR15)
 			if motor then
 				pcall(function()
-					if self.isR15 then
-						motor.C0 = ApplyR15Limits(motor, self.savedC0[motor], data.CFrame)
+					if data.IsRoot then
+						-- This is a root movement pose
+						hasRootMovement = true
+						rootCFrame = data.CFrame
+						
+						-- Apply to root motor if it exists
+						if self.rootMotor then
+							if self.isR15 then
+								self.rootMotor.C0 = ApplyR15Limits(self.rootMotor, self.savedC0[self.rootMotor], data.CFrame)
+							else
+								self.rootMotor.C0 = self.savedC0[self.rootMotor] * data.CFrame
+							end
+						end
 					else
-						motor.C0 = self.savedC0[motor] * data.CFrame
+						-- Regular pose
+						if self.isR15 then
+							motor.C0 = ApplyR15Limits(motor, self.savedC0[motor], data.CFrame)
+						else
+							motor.C0 = self.savedC0[motor] * data.CFrame
+						end
 					end
 				end)
 			end
+		end
+		
+		-- Apply root movement if present
+		if hasRootMovement and rootCFrame and humanoidRootPart then
+			-- Calculate movement based on root CFrame delta
+			if self.prevRootCFrame then
+				local delta = self.prevRootCFrame:Inverse() * rootCFrame
+				self.accumulatedRootDelta = self.accumulatedRootDelta * delta
+				
+				-- Apply movement to character
+				local targetPosition = (self.originalRootCFrame * self.accumulatedRootDelta).Position
+				local moveDirection = (targetPosition - humanoidRootPart.Position)
+				
+				if moveDirection.Magnitude > 0.1 then
+					-- Smooth movement
+					local moveSpeed = math.min(moveDirection.Magnitude / frameDelta, 50)
+					local moveVelocity = moveDirection.Unit * moveSpeed
+					
+					-- Apply velocity
+					humanoidRootPart.Velocity = Vector3.new(moveVelocity.X, 0, moveVelocity.Z)
+					
+					-- Move humanoid
+					hum:Move(humanoidRootPart.Velocity)
+				end
+			end
+			
+			-- Update previous root CFrame
+			self.prevRootCFrame = rootCFrame
+		else
+			self.prevRootCFrame = nil
 		end
 	end)
 end
 
 function AnimPlayer:Stop(restore)
 	self.playing = false
-	if self.conn then self.conn:Disconnect() self.conn = nil end
+	
+	-- Disable movement controller
+	self.movementController:Cleanup()
+	
+	if self.conn then 
+		self.conn:Disconnect() 
+		self.conn = nil 
+	end
+	
+	-- Reset root part velocity
+	if humanoidRootPart then
+		humanoidRootPart.Velocity = Vector3.new()
+	end
+	
 	if restore then
+		-- Restore motor positions
 		for motor, origC0 in pairs(self.savedC0) do
-			pcall(function() motor.C0 = origC0 end)
+			pcall(function() 
+				motor.C0 = origC0 
+			end)
+		end
+		
+		-- Restore humanoid state
+		if hum then
+			hum:ChangeState(Enum.HumanoidStateType.Running)
 		end
 	else
+		-- Reset motor transforms
 		for _, m in pairs(self.map) do
-			pcall(function() m.Transform = CFrame.new() end)
+			pcall(function() 
+				m.Transform = CFrame.new() 
+			end)
 		end
 	end
+	
+	-- Reset accumulated root delta
+	self.accumulatedRootDelta = CFrame.new()
+	self.prevRootCFrame = nil
 end
 
 -- ========== DISABLE DEFAULT ANIMS ==========
@@ -295,6 +513,7 @@ local function setupCharacterWatcher()
 	player.CharacterAdded:Connect(function(newChar)
 		character = newChar
 		hum = character:WaitForChild("Humanoid")
+		humanoidRootPart = character:WaitForChild("HumanoidRootPart")
 		
 		-- Update current animator if exists
 		if getgenv().currentAnimator6D and getgenv().currentAnimator6D.playing then
@@ -363,11 +582,11 @@ setupCharacterWatcher()
 
 -- ========== NOTIFY ==========
 warn("[Animator6D Pro V4] ya.. Allah hotbar")
-warn("[Animator6D Pro V4] Now with R15 support!")
+warn("[Animator6D Pro V4] Now with accurate R15 root movement!")
 pcall(function()
 	game:GetService("StarterGui"):SetCore("SendNotification", {
 		Title = "Animator6D Pro V4",
-		Text = "Loaded with R6/R15 Support!",
+		Text = "Loaded with accurate R15 root movement!",
 		Duration = 5
 	})
 end)
