@@ -103,37 +103,11 @@ local R15MapAlt = {
 	["Right Leg"] = "RightHip"
 }
 
--- ========== R15 ROTATION CORRECTION ==========
--- R15 default orientation correction matrices
-local R15_Rotation_Corrections = {
-	-- Root joint (LowerTorso) - R15 faces +Z instead of -Z like R6
-	["Root"] = CFrame.fromEulerAnglesXYZ(0, math.rad(180), 0),
-	["RootJoint"] = CFrame.fromEulerAnglesXYZ(0, math.rad(180), 0),
-	
-	-- Waist joint (UpperTorso) - Correct for R15 forward orientation
-	["Waist"] = CFrame.fromEulerAnglesXYZ(0, math.rad(180), 0),
-	
-	-- Neck - R15 neck has different default rotation
-	["Neck"] = CFrame.fromEulerAnglesXYZ(math.rad(-90), 0, 0),
-	
-	-- Shoulders - R15 arms are rotated differently
-	["LeftShoulder"] = CFrame.fromEulerAnglesXYZ(0, math.rad(180), 0),
-	["RightShoulder"] = CFrame.fromEulerAnglesXYZ(0, math.rad(180), 0),
-	
-	-- Hips - R15 legs have different default rotation
-	["LeftHip"] = CFrame.fromEulerAnglesXYZ(0, 0, 0),
-	["RightHip"] = CFrame.fromEulerAnglesXYZ(0, 0, 0),
-	
-	-- Other joints
-	["LeftElbow"] = CFrame.fromEulerAnglesXYZ(0, 0, 0),
-	["RightElbow"] = CFrame.fromEulerAnglesXYZ(0, 0, 0),
-	["LeftKnee"] = CFrame.fromEulerAnglesXYZ(0, 0, 0),
-	["RightKnee"] = CFrame.fromEulerAnglesXYZ(0, 0, 0),
-	["LeftAnkle"] = CFrame.fromEulerAnglesXYZ(0, 0, 0),
-	["RightAnkle"] = CFrame.fromEulerAnglesXYZ(0, 0, 0)
-}
+-- ========== SIMPLIFIED R15 CORRECTION ==========
+-- Only apply minimal corrections to fix the forward direction issue
+local R15_Root_Correction = CFrame.Angles(0, math.rad(180), 0)
 
--- R15 default C0 values (for reference)
+-- R15 default C0 values (for reference only)
 local R15_Default_C0 = {
 	["Root"] = CFrame.new(0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0),
 	["Waist"] = CFrame.new(0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0),
@@ -225,42 +199,29 @@ local function FindMotor(poseName, map, lower, isR15)
 	return map[match] or lower[string.lower(match)]
 end
 
--- ========== R15 ROTATION CORRECTION FUNCTIONS ==========
-local function ApplyR15RotationCorrection(motor, origC0, dataCFrame, poseName)
-	local motorName = motor.Name
+-- ========== MINIMAL R15 CORRECTION ==========
+local function ApplyR15Correction(motor, origC0, dataCFrame, poseName, isR15)
+	if not isR15 then
+		return origC0 * dataCFrame
+	end
 	
-	-- Special handling for root poses in R15
-	if poseName == "HumanoidRootPart" or poseName == "Torso" or poseName == "LowerTorso" then
-		if motorName == "Root" or motorName == "RootJoint" then
-			-- Apply 180-degree Y rotation correction for R15 root
-			local correction = CFrame.Angles(0, math.rad(180), 0)
-			return origC0 * correction * dataCFrame
+	-- Only apply correction to root/waist joints for forward direction
+	local motorName = motor.Name
+	if motorName == "Root" or motorName == "RootJoint" or motorName == "Waist" then
+		-- Check if this is a root pose
+		if poseName == "HumanoidRootPart" or poseName == "Torso" or poseName == "LowerTorso" or poseName == "UpperTorso" then
+			-- Apply minimal correction only to fix forward direction
+			return origC0 * R15_Root_Correction * dataCFrame
 		end
 	end
 	
-	-- Apply standard correction if available
-	if R15_Rotation_Corrections[motorName] then
-		return origC0 * R15_Rotation_Corrections[motorName] * dataCFrame
-	end
-	
-	-- Default fallback
+	-- For all other joints, apply animation directly (no correction)
 	return origC0 * dataCFrame
 end
 
 local function FixR15RootMovement(rootCFrame)
-	-- R15 faces +Z by default, but animations are made for R6 which faces -Z
-	-- Apply 180-degree Y rotation to fix forward direction
-	local rotationCorrection = CFrame.Angles(0, math.rad(180), 0)
-	
-	-- Extract position and apply corrected rotation
-	local position = rootCFrame.Position
-	local rotation = rootCFrame.Rotation
-	
-	-- Apply correction
-	local correctedRotation = rotationCorrection * rotation
-	
-	-- Return corrected CFrame
-	return CFrame.new(position) * correctedRotation
+	-- Only apply 180-degree Y rotation to fix forward direction
+	return CFrame.new(rootCFrame.Position) * R15_Root_Correction * rootCFrame.Rotation
 end
 
 -- ========== MOVEMENT CONTROLLER ==========
@@ -323,44 +284,36 @@ end
 function MovementController:ApplyRootMovement(rootCFrame, deltaTime, isR15)
 	if not self.rootPart then return end
 	
-	-- Apply R15 rotation correction if needed
+	-- Apply minimal R15 correction only
 	local correctedCFrame = rootCFrame
 	if isR15 then
 		correctedCFrame = FixR15RootMovement(rootCFrame)
 	end
 	
-	-- Extract position and rotation
+	-- Extract position for movement
 	local position = correctedCFrame.Position
 	local rotation = correctedCFrame.Rotation
 	
-	-- Calculate forward direction (Z-axis of rotation)
-	local forwardVector = rotation.LookVector
-	local upVector = rotation.UpVector
-	
-	-- For movement, we only care about horizontal translation
+	-- Calculate movement direction (only horizontal)
 	local horizontalPosition = Vector3.new(position.X, self.rootPart.Position.Y, position.Z)
-	local horizontalDirection = (horizontalPosition - self.rootPart.Position)
+	local moveDirection = horizontalPosition - self.rootPart.Position
 	
-	if horizontalDirection.Magnitude > 0 then
-		-- Normalize and scale by speed
-		local moveSpeed = math.min(horizontalDirection.Magnitude / deltaTime, 30)
-		horizontalDirection = horizontalDirection.Unit * moveSpeed
+	if moveDirection.Magnitude > 0.1 then
+		-- Calculate speed and apply velocity
+		local moveSpeed = math.min(moveDirection.Magnitude / deltaTime, 50)
+		local velocity = moveDirection.Unit * moveSpeed
 		
-		-- Apply horizontal velocity
-		local velocity = Vector3.new(horizontalDirection.X, 0, horizontalDirection.Z)
-		self.rootPart.Velocity = velocity
+		-- Apply horizontal velocity (keep Y velocity for gravity)
+		self.rootPart.Velocity = Vector3.new(velocity.X, self.rootPart.Velocity.Y, velocity.Z)
 		
-		-- Update humanoid movement
-		self.hum:Move(self.rootPart.Velocity)
+		-- Move humanoid for collision
+		hum:Move(Vector3.new(velocity.X, 0, velocity.Z))
 	end
 	
-	-- Apply rotation to character (pitch/roll only, not yaw to prevent spinning)
-	local currentCFrame = self.rootPart.CFrame
-	local currentYRotation = currentCFrame.Rotation.Y
-	local targetRotation = CFrame.new(currentCFrame.Position) * rotation
-	
-	-- Smoothly rotate toward target
-	self.rootPart.CFrame = currentCFrame:Lerp(targetRotation, 0.3)
+	-- Apply rotation smoothly
+	local currentCF = self.rootPart.CFrame
+	local targetCF = CFrame.new(self.rootPart.Position) * rotation
+	self.rootPart.CFrame = currentCF:Lerp(targetCF, 0.1)
 end
 
 function MovementController:Cleanup()
@@ -400,7 +353,7 @@ function AnimPlayer.new(rig, kfs)
 	
 	-- Handle R15 specific setup
 	if self.isR15 then
-		warn("[Animator6D] Detected R15 character - applying rotation corrections")
+		warn("[Animator6D] Detected R15 character - using minimal correction")
 		
 		-- Ensure all necessary motors exist
 		for _, motorName in pairs(R15Map) do
@@ -488,16 +441,13 @@ function AnimPlayer:Play(speed, loop)
 						
 						-- Apply to root motor if it exists
 						if self.rootMotor then
-							if self.isR15 then
-								self.rootMotor.C0 = ApplyR15RotationCorrection(self.rootMotor, self.savedC0[self.rootMotor], data.CFrame, joint)
-							else
-								self.rootMotor.C0 = self.savedC0[self.rootMotor] * data.CFrame
-							end
+							self.rootMotor.C0 = ApplyR15Correction(self.rootMotor, self.savedC0[self.rootMotor], data.CFrame, joint, self.isR15)
 						end
 					else
-						-- Regular pose
+						-- Regular pose - apply animation directly without correction for arms/head
 						if self.isR15 then
-							motor.C0 = ApplyR15RotationCorrection(motor, self.savedC0[motor], data.CFrame, joint)
+							-- For non-root joints, use animation CFrame directly
+							motor.C0 = self.savedC0[motor] * data.CFrame
 						else
 							motor.C0 = self.savedC0[motor] * data.CFrame
 						end
@@ -641,11 +591,11 @@ setupCharacterWatcher()
 
 -- ========== NOTIFY ==========
 warn("[Animator6D Pro V4] ya.. Allah hotbar")
-warn("[Animator6D Pro V4] Now with fixed R15 rotation!")
+warn("[Animator6D Pro V4] Now with minimal R15 correction (arms/head preserved)!")
 pcall(function()
 	game:GetService("StarterGui"):SetCore("SendNotification", {
 		Title = "Animator6D Pro V4",
-		Text = "Loaded with fixed R15 rotation correction!",
+		Text = "Loaded with minimal R15 correction!",
 		Duration = 5
 	})
 end)
