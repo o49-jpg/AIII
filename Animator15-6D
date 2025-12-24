@@ -1,0 +1,398 @@
+--//====================================================================\\--
+--||                Animator6D Pro V4 (R6/R15)                          ||--
+--||  Author: "gObl00x" Credits to him                                  ||--
+--||  Features: universal rig, local cache, safe play                   ||--
+--||                                                                    ||
+--\\====================================================================//--
+
+if getgenv().Animator6DLoadedPro then return end
+getgenv().Animator6DLoadedPro = true
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local hum = character:WaitForChild("Humanoid")
+
+-- ========== LOCAL CACHE / 403 EVASION ==========
+local LocalAssetCache = {}
+local fullModel = nil
+pcall(function()
+	fullModel = game:GetObjects("rbxassetid://107495486817639")[1]
+	if fullModel then
+		fullModel.Parent = workspace
+	end
+end)
+
+local function LoadLocalAsset(id)
+	id = tostring(id):gsub("^rbxassetid://", "")
+	if LocalAssetCache[id] then
+		return LocalAssetCache[id]
+	end
+
+	local found = fullModel and fullModel:FindFirstChild(id, true)
+	if found then
+		LocalAssetCache[id] = found
+		warn("[Animator6D] ✅ Loaded from local cache:", id)
+		return found
+	end
+
+	local ok, obj = pcall(function()
+		return game:GetObjects("rbxassetid://" .. id)[1]
+	end)
+	if ok and obj then
+		LocalAssetCache[id] = obj
+		warn("[Animator6D] ✅ Loaded via GetObjects👍👍:", id)
+		return obj
+	end
+
+	warn("[Animator6D] ts is bad, failed to load animation:", id)
+	return nil
+end
+-- ===============================================
+
+-- ========== RIG DETECTION ==========
+local function IsR15(character)
+	return hum.RigType == Enum.HumanoidRigType.R15
+end
+
+local function GetRigType()
+	return IsR15(character) and "R15" or "R6"
+end
+
+-- ========== MOTOR MAPPINGS ==========
+local R6Map = {
+	["Head"] = "Neck",
+	["Torso"] = "RootJoint",
+	["Right Arm"] = "Right Shoulder",
+	["Left Arm"] = "Left Shoulder",
+	["Right Leg"] = "Right Hip",
+	["Left Leg"] = "Left Hip"
+}
+
+local R15Map = {
+	-- UpperTorso joints
+	["Head"] = "Neck",
+	["UpperTorso"] = "Waist",
+	["LeftUpperArm"] = "LeftShoulder",
+	["RightUpperArm"] = "RightShoulder",
+	
+	-- LowerTorso joints
+	["LowerTorso"] = "Root",
+	["LeftUpperLeg"] = "LeftHip",
+	["RightUpperLeg"] = "RightHip",
+	
+	-- Additional R15 joints
+	["LeftLowerArm"] = "LeftElbow",
+	["RightLowerArm"] = "RightElbow",
+	["LeftLowerLeg"] = "LeftKnee",
+	["RightLowerLeg"] = "RightKnee",
+	["LeftFoot"] = "LeftAnkle",
+	["RightFoot"] = "RightAnkle"
+}
+
+-- Alternative mapping for different naming conventions
+local R15MapAlt = {
+	["Torso"] = "Waist",
+	["Left Arm"] = "LeftShoulder",
+	["Right Arm"] = "RightShoulder",
+	["Left Leg"] = "LeftHip",
+	["Right Leg"] = "RightHip"
+}
+
+-- ========== KEYFRAME PARSER ==========
+local function ConvertToTable(kfs)
+	if not (kfs and typeof(kfs) == "Instance" and kfs:IsA("KeyframeSequence")) then
+		if typeof(kfs) == "Instance" then
+			for _, obj in ipairs(kfs:GetDescendants()) do
+				if obj:IsA("KeyframeSequence") then
+					kfs = obj
+					break
+				end
+			end
+		end
+	end
+
+	assert(kfs and typeof(kfs) == "Instance" and kfs:IsA("KeyframeSequence"), "Expected KeyframeSequence")
+
+	local seq = {}
+	for _, frame in ipairs(kfs:GetKeyframes()) do
+		local entry = { Time = frame.Time, Data = {} }
+		for _, pose in ipairs(frame:GetDescendants()) do
+			if pose:IsA("Pose") and pose.Weight > 0 then
+				entry.Data[pose.Name] = { CFrame = pose.CFrame }
+			end
+		end
+		table.insert(seq, entry)
+	end
+	table.sort(seq, function(a, b) return a.Time < b.Time end)
+	return seq, kfs.Loop
+end
+
+-- ========== MOTOR MAP ==========
+local function BuildMotorMap(rig)
+	local map, lower = {}, {}
+	for _, m in ipairs(rig:GetDescendants()) do
+		if m:IsA("Motor6D") then
+			map[m.Name] = m
+			lower[string.lower(m.Name)] = m
+			
+			-- For R15, also map part names to motors
+			if m.Part1 then
+				local partName = m.Part1.Name
+				if not map[partName] then
+					map[partName] = m
+				end
+			end
+		end
+	end
+	return map, lower
+end
+
+local function FindMotor(poseName, map, lower, isR15)
+	if isR15 then
+		-- Try R15 mapping first
+		local r15Match = R15Map[poseName] or R15MapAlt[poseName]
+		if r15Match then
+			return map[r15Match] or lower[string.lower(r15Match)]
+		end
+		
+		-- Try direct part name mapping (already done in BuildMotorMap)
+		if map[poseName] then
+			return map[poseName]
+		end
+		
+		-- Try common variations
+		local lowerName = string.lower(poseName)
+		for motorName, motor in pairs(lower) do
+			if string.find(motorName, lowerName) or string.find(lowerName, motorName) then
+				return motor
+			end
+		end
+	end
+	
+	-- R6 mapping (fallback)
+	local match = R6Map[poseName] or poseName
+	return map[match] or lower[string.lower(match)]
+end
+
+-- ========== R15 LIMIT HANDLING ==========
+local R15MotorLimits = {
+	["Neck"] = { C0 = CFrame.new(0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0) },
+	["Waist"] = { C0 = CFrame.new(0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0) },
+	["Root"] = { C0 = CFrame.new(0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0) }
+}
+
+local function ApplyR15Limits(motor, origC0, dataCFrame)
+	if R15MotorLimits[motor.Name] then
+		return R15MotorLimits[motor.Name].C0 * dataCFrame
+	end
+	return origC0 * dataCFrame
+end
+
+-- ========== ANIM PLAYER ==========
+local AnimPlayer = {}
+AnimPlayer.__index = AnimPlayer
+
+function AnimPlayer.new(rig, kfs)
+	local self = setmetatable({}, AnimPlayer)
+	self.rig = rig
+	self.seq, self.looped = ConvertToTable(kfs)
+	self.map, self.lower = BuildMotorMap(rig)
+	self.time, self.playing = 0, false
+	self.length = self.seq[#self.seq].Time
+	self.speed = 1
+	self.isR15 = IsR15(rig)
+	self.savedC0 = {}
+	
+	-- Save original C0 values
+	for _, m in pairs(self.map) do
+		self.savedC0[m] = m.C0
+	end
+	
+	-- Handle R15 specific setup
+	if self.isR15 then
+		warn("[Animator6D] Detected R15 character")
+		
+		-- Ensure all necessary motors exist
+		for _, motorName in pairs(R15Map) do
+			if not self.map[motorName] then
+				-- Try to find by part name
+				for partName, motor in pairs(self.map) do
+					if motor.Part1 and motor.Part1.Name == partName then
+						self.map[motorName] = motor
+					end
+				end
+			end
+		end
+	end
+	
+	return self
+end
+
+function AnimPlayer:Play(speed, loop)
+	if self.playing then return end
+	self.playing, self.speed = true, speed or 1
+	self.looped = (loop == nil) and true or loop
+
+	self.conn = RunService.Heartbeat:Connect(function(dt)
+		if not self.playing then return end
+		self.time += dt * self.speed
+
+		if self.time > self.length then
+			if self.looped then
+				self.time -= self.length
+			else
+				self:Stop(true)
+				return
+			end
+		end
+
+		local prev = self.seq[1]
+		for i = 1, #self.seq do
+			if self.seq[i].Time <= self.time then
+				prev = self.seq[i]
+			else
+				break
+			end
+		end
+
+		for joint, data in pairs(prev.Data) do
+			local motor = FindMotor(joint, self.map, self.lower, self.isR15)
+			if motor then
+				pcall(function()
+					if self.isR15 then
+						motor.C0 = ApplyR15Limits(motor, self.savedC0[motor], data.CFrame)
+					else
+						motor.C0 = self.savedC0[motor] * data.CFrame
+					end
+				end)
+			end
+		end
+	end)
+end
+
+function AnimPlayer:Stop(restore)
+	self.playing = false
+	if self.conn then self.conn:Disconnect() self.conn = nil end
+	if restore then
+		for motor, origC0 in pairs(self.savedC0) do
+			pcall(function() motor.C0 = origC0 end)
+		end
+	else
+		for _, m in pairs(self.map) do
+			pcall(function() m.Transform = CFrame.new() end)
+		end
+	end
+end
+
+-- ========== DISABLE DEFAULT ANIMS ==========
+local function disableDefaultAnimations(char)
+	if not hum then return end
+	for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
+		track:Stop(0)
+	end
+	local animScript = char:FindFirstChild("Animate")
+	if animScript then animScript.Disabled = true end
+	local animator = hum:FindFirstChildOfClass("Animator")
+	if animator then animator:Destroy() end
+end
+
+-- ========== R15 CHARACTER UPDATE HANDLER ==========
+local function setupCharacterWatcher()
+	player.CharacterAdded:Connect(function(newChar)
+		character = newChar
+		hum = character:WaitForChild("Humanoid")
+		
+		-- Update current animator if exists
+		if getgenv().currentAnimator6D and getgenv().currentAnimator6D.playing then
+			local currentId = getgenv().currentAnimator6D.animId
+			local currentSpeed = getgenv().currentAnimator6D.speed
+			local currentLooped = getgenv().currentAnimator6D.looped
+			
+			-- Stop old animator
+			getgenv().currentAnimator6D:Stop(false)
+			
+			-- Wait a moment for character to fully load
+			task.wait(0.5)
+			
+			-- Reapply animation if we have a stored ID
+			if currentId then
+				getgenv().Animator6D(currentId, currentSpeed, currentLooped)
+			end
+		end
+	end)
+end
+
+-- ========== GLOBAL INTERFACE ==========
+getgenv().Animator6D = function(idOrInstance, speed, looped)
+	local kfs
+	if typeof(idOrInstance) == "Instance" then
+		kfs = idOrInstance:IsA("KeyframeSequence") and idOrInstance or idOrInstance:FindFirstChildOfClass("KeyframeSequence")
+	else
+		local asset = LoadLocalAsset(idOrInstance)
+		if asset then
+			kfs = asset:FindFirstChildOfClass("KeyframeSequence") or asset
+		end
+	end
+
+	if not kfs then
+		warn("[Animator6D] yo sorry could not load animation:", idOrInstance)
+		return
+	end
+
+	disableDefaultAnimations(character)
+
+	if getgenv().currentAnimator6D then
+		pcall(function()
+			getgenv().currentAnimator6D:Stop(true)
+		end)
+	end
+
+	local anim = AnimPlayer.new(character, kfs)
+	getgenv().currentAnimator6D = anim
+	anim.animId = typeof(idOrInstance) == "number" and idOrInstance or nil
+	anim.speed = speed or 1
+	anim.looped = looped
+	anim:Play(speed or 1, looped)
+	
+	warn("[Animator6D] Playing animation on", GetRigType(), "character")
+end
+
+getgenv().Animator6DStop = function()
+	if getgenv().currentAnimator6D then
+		pcall(function() getgenv().currentAnimator6D:Stop(true) end)
+		getgenv().currentAnimator6D = nil
+	end
+end
+
+-- ========== INITIAL SETUP ==========
+setupCharacterWatcher()
+
+-- ========== NOTIFY ==========
+warn("[Animator6D Pro V4] ya.. Allah hotbar")
+warn("[Animator6D Pro V4] Now with R15 support!")
+pcall(function()
+	game:GetService("StarterGui"):SetCore("SendNotification", {
+		Title = "Animator6D Pro V4",
+		Text = "Loaded with R6/R15 Support!",
+		Duration = 5
+	})
+end)
+
+--
+--[[
+(pls, If ur down here, read these instructions)
+Instructions:
+--
+If u want to play the anim outside ts loadstring, then:
+getgenv().Animator6D(1234567890, 1, true) -- idOrInstance, Speed, Looped? --
+--
+If u will be using an instance and not an ID, then:
+local animInstance = game:GetObjects("rbxassetid://ID")[1]..Here the KeyframeSequence Path -- replace ID with the ID --
+getgenv().Animator6D(animInstance, 1, true) -- or false if u want the anim to have a loop
+--
+If u want to stop the anim outside ts loadstring, then:
+getgenv().Animator6DStop()
+--]]
