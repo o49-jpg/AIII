@@ -92,15 +92,6 @@ local R15Map = {
 	["RightFoot"] = "RightAnkle"
 }
 
--- Alternative mapping for different naming conventions
-local R15MapAlt = {
-	["Torso"] = "Waist",
-	["Left Arm"] = "LeftShoulder",
-	["Right Arm"] = "RightShoulder",
-	["Left Leg"] = "LeftHip",
-	["Right Leg"] = "RightHip"
-}
-
 -- ========== KEYFRAME PARSER ==========
 local function ConvertToTable(kfs)
 	if not (kfs and typeof(kfs) == "Instance" and kfs:IsA("KeyframeSequence")) then
