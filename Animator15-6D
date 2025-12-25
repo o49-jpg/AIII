@@ -2,7 +2,7 @@
 --||                Animator6D Pro V4 (R6/R15)          ||--
 --||  Author: gObl00x + GPT-5                          ||--
 --||  Features: universal rig, local cache, safe play   ||--
---||  Custom model support for R15 games               ||--
+--||  Auto-detects player custom models                ||--
 --\\====================================================//--
 
 if getgenv().Animator6DLoadedPro then return end
@@ -12,127 +12,172 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local character = player.Character or player.CharacterAdded:Wait()
-local hum = character:WaitForChild("Humanoid")
-local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+
+-- ========== AUTO MODEL DETECTION ==========
+local function FindPlayerModel()
+    -- First check player's character
+    local char = player.Character
+    if char then
+        -- Check if character has Motor6Ds (custom model)
+        for _, obj in ipairs(char:GetDescendants()) do
+            if obj:IsA("Motor6D") then
+                -- Found Motor6D in player character
+                warn("[Animator6D] Found custom model in player character:", char.Name)
+                return char
+            end
+        end
+        
+        -- Also check for standard R15/R6 rig
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            warn("[Animator6D] Using player's standard", hum.RigType == Enum.HumanoidRigType.R15 and "R15" or "R6", "character")
+            return char
+        end
+    end
+    
+    -- Check O49_R folder as fallback
+    local o49Folder = workspace:FindFirstChild("O49_R")
+    if o49Folder then
+        for _, model in ipairs(o49Folder:GetChildren()) do
+            if model:IsA("Model") then
+                -- Check if model has Motor6Ds
+                for _, obj in ipairs(model:GetDescendants()) do
+                    if obj:IsA("Motor6D") then
+                        warn("[Animator6D] Found model in O49_R:", model.Name)
+                        return model
+                    end
+                end
+            end
+        end
+    end
+    
+    return nil
+end
+
+-- Initialize character
+local character, hum, humanoidRootPart
+
+local function UpdateCharacter()
+    local foundModel = FindPlayerModel()
+    
+    if foundModel then
+        character = foundModel
+        hum = character:FindFirstChildOfClass("Humanoid")
+        humanoidRootPart = character:FindFirstChild("HumanoidRootPart") or character.PrimaryPart
+        
+        if hum then
+            warn("[Animator6D] Using model:", character.Name, "(" .. (hum.RigType == Enum.HumanoidRigType.R15 and "R15" or "R6") .. ")")
+        else
+            warn("[Animator6D] Using model:", character.Name, "(no Humanoid found)")
+        end
+    else
+        -- Wait for player character
+        character = player.Character or player.CharacterAdded:Wait()
+        hum = character:WaitForChild("Humanoid")
+        humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+        warn("[Animator6D] Using standard player character")
+    end
+end
+
+-- Initial character setup
+UpdateCharacter()
 
 -- ========== LOCAL CACHE / 403 EVASION ==========
 local LocalAssetCache = {}
 local fullModel = nil
 pcall(function()
-	fullModel = game:GetObjects("rbxassetid://107495486817639")[1]
-	if fullModel then
-		fullModel.Parent = workspace
-	end
+    fullModel = game:GetObjects("rbxassetid://107495486817639")[1]
+    if fullModel then
+        fullModel.Parent = workspace
+    end
 end)
 
 local function LoadLocalAsset(id)
-	id = tostring(id):gsub("^rbxassetid://", "")
-	if LocalAssetCache[id] then
-		return LocalAssetCache[id]
-	end
+    id = tostring(id):gsub("^rbxassetid://", "")
+    if LocalAssetCache[id] then
+        return LocalAssetCache[id]
+    end
 
-	local found = fullModel and fullModel:FindFirstChild(id, true)
-	if found then
-		LocalAssetCache[id] = found
-		warn("[Animator6D] ✅ Loaded from local cache:", id)
-		return found
-	end
+    local found = fullModel and fullModel:FindFirstChild(id, true)
+    if found then
+        LocalAssetCache[id] = found
+        warn("[Animator6D] ✅ Loaded from local cache:", id)
+        return found
+    end
 
-	local ok, obj = pcall(function()
-		return game:GetObjects("rbxassetid://" .. id)[1]
-	end)
-	if ok and obj then
-		LocalAssetCache[id] = obj
-		warn("[Animator6D] ✅ Loaded via GetObjects👍👍:", id)
-		return obj
-	end
+    local ok, obj = pcall(function()
+        return game:GetObjects("rbxassetid://" .. id)[1]
+    end)
+    if ok and obj then
+        LocalAssetCache[id] = obj
+        warn("[Animator6D] ✅ Loaded via GetObjects👍👍:", id)
+        return obj
+    end
 
-	warn("[Animator6D] ts is bad, failed to load animation:", id)
-	return nil
+    warn("[Animator6D] ts is bad, failed to load animation:", id)
+    return nil
 end
 -- ===============================================
 
 -- ========== RIG DETECTION ==========
-local function IsR15(character)
-	return hum.RigType == Enum.HumanoidRigType.R15
+local function IsR15(model)
+    if not model then return false end
+    local modelHum = model:FindFirstChildOfClass("Humanoid")
+    if modelHum then
+        return modelHum.RigType == Enum.HumanoidRigType.R15
+    end
+    
+    -- If no humanoid, check for R15 parts
+    local hasUpperTorso = model:FindFirstChild("UpperTorso") or model:FindFirstChild("UpperTorso", true)
+    local hasLowerTorso = model:FindFirstChild("LowerTorso") or model:FindFirstChild("LowerTorso", true)
+    return hasUpperTorso and hasLowerTorso
 end
 
 local function GetRigType()
-	return IsR15(character) and "R15" or "R6"
+    return IsR15(character) and "R15" or "R6"
 end
 
--- ========== IMPROVED MOTOR MAPPINGS ==========
+-- ========== UNIVERSAL MOTOR MAPPINGS ==========
 local R6Map = {
-	["Head"] = "Neck",
-	["Torso"] = "RootJoint",
-	["Right Arm"] = "Right Shoulder",
-	["Left Arm"] = "Left Shoulder",
-	["Right Leg"] = "Right Hip",
-	["Left Leg"] = "Left Hip"
+    ["Head"] = "Neck",
+    ["Torso"] = "RootJoint",
+    ["Right Arm"] = "Right Shoulder",
+    ["Left Arm"] = "Left Shoulder",
+    ["Right Leg"] = "Right Hip",
+    ["Left Leg"] = "Left Hip"
 }
 
--- Enhanced R15 mapping with common custom model variations
 local R15Map = {
-	-- Standard R15 parts
-	["Head"] = "Neck",
-	["UpperTorso"] = "Waist",
-	["LeftUpperArm"] = "LeftShoulder",
-	["RightUpperArm"] = "RightShoulder",
-	["LowerTorso"] = "Root",
-	["LeftUpperLeg"] = "LeftHip",
-	["RightUpperLeg"] = "RightHip",
-	
-	-- Additional R15 joints
-	["LeftLowerArm"] = "LeftElbow",
-	["RightLowerArm"] = "RightElbow",
-	["LeftLowerLeg"] = "LeftKnee",
-	["RightLowerLeg"] = "RightKnee",
-	["LeftFoot"] = "LeftAnkle",
-	["RightFoot"] = "RightAnkle",
-	
-	-- Common custom model variations
-	["UpperTorsoHatch"] = "Waist",
-	["LowerTorsoHatch"] = "Root",
-	["Pelvis"] = "Root",
-	["Hips"] = "Root",
-	["Spine"] = "Waist",
-	["Spine1"] = "Waist",
-	["Spine2"] = "Waist",
-	["Chest"] = "Waist",
-	
-	-- Shoulder/arm variations
-	["LeftArm"] = "LeftShoulder",
-	["RightArm"] = "RightShoulder",
-	["LeftShoulderGroup"] = "LeftShoulder",
-	["RightShoulderGroup"] = "RightShoulder",
-	["LeftUpperArmGroup"] = "LeftShoulder",
-	["RightUpperArmGroup"] = "RightShoulder",
-	
-	-- Hand variations
-	["LeftHand"] = "LeftWrist",
-	["RightHand"] = "RightWrist",
-	
-	-- Custom Freddy joints based on your structure
-	["UpperHalf"] = "Waist",
-	["Bowtie"] = "Waist",
-	["LeftShoulderPad"] = "LeftShoulder",
-	["RightShoulderPad"] = "RightShoulder",
-	["Neck"] = "Neck",
-	["UpperTorsoHatch"] = "Waist",
-	["LowerTorsoHatch"] = "Root",
-	["RightElbowGroup"] = "RightElbow",
-	["LeftElbowGroup"] = "LeftElbow"
-}
-
--- Fallback mappings for different naming conventions
-local R15MapAlt = {
-	["Torso"] = "Waist",
-	["Left Arm"] = "LeftShoulder",
-	["Right Arm"] = "RightShoulder",
-	["Left Leg"] = "LeftHip",
-	["Right Leg"] = "RightHip",
-	["HumanoidRootPart"] = "Root"
+    -- Standard R15 parts
+    ["Head"] = "Neck",
+    ["UpperTorso"] = "Waist",
+    ["LeftUpperArm"] = "LeftShoulder",
+    ["RightUpperArm"] = "RightShoulder",
+    ["LowerTorso"] = "Root",
+    ["LeftUpperLeg"] = "LeftHip",
+    ["RightUpperLeg"] = "RightHip",
+    
+    -- Additional R15 joints
+    ["LeftLowerArm"] = "LeftElbow",
+    ["RightLowerArm"] = "RightElbow",
+    ["LeftLowerLeg"] = "LeftKnee",
+    ["RightLowerLeg"] = "RightKnee",
+    ["LeftFoot"] = "LeftAnkle",
+    ["RightFoot"] = "RightAnkle",
+    
+    -- Common variations
+    ["Torso"] = "Waist",
+    ["Left Arm"] = "LeftShoulder",
+    ["Right Arm"] = "RightShoulder",
+    ["Left Leg"] = "LeftHip",
+    ["Right Leg"] = "RightHip",
+    ["HumanoidRootPart"] = "Root",
+    
+    -- Custom model support
+    ["Pelvis"] = "Root",
+    ["Spine"] = "Waist",
+    ["Chest"] = "Waist",
+    ["Hips"] = "Root"
 }
 
 -- ========== MINIMAL R15 CORRECTION ==========
@@ -140,215 +185,166 @@ local R15_Root_Correction = CFrame.Angles(0, math.rad(180), 0)
 
 -- ========== KEYFRAME PARSER ==========
 local function ConvertToTable(kfs)
-	if not (kfs and typeof(kfs) == "Instance" and kfs:IsA("KeyframeSequence")) then
-		if typeof(kfs) == "Instance" then
-			for _, obj in ipairs(kfs:GetDescendants()) do
-				if obj:IsA("KeyframeSequence") then
-					kfs = obj
-					break
-				end
-			end
-		end
-	end
+    if not (kfs and typeof(kfs) == "Instance" and kfs:IsA("KeyframeSequence")) then
+        if typeof(kfs) == "Instance" then
+            for _, obj in ipairs(kfs:GetDescendants()) do
+                if obj:IsA("KeyframeSequence") then
+                    kfs = obj
+                    break
+                end
+            end
+        end
+    end
 
-	assert(kfs and typeof(kfs) == "Instance" and kfs:IsA("KeyframeSequence"), "Expected KeyframeSequence")
+    assert(kfs and typeof(kfs) == "Instance" and kfs:IsA("KeyframeSequence"), "Expected KeyframeSequence")
 
-	local seq = {}
-	for _, frame in ipairs(kfs:GetKeyframes()) do
-		local entry = { Time = frame.Time, Data = {} }
-		for _, pose in ipairs(frame:GetDescendants()) do
-			if pose:IsA("Pose") and pose.Weight > 0 then
-				-- Check if this is a root pose
-				local isRootPose = pose.Name == "HumanoidRootPart" or pose.Name == "Torso" or pose.Name == "LowerTorso" or 
-								  pose.Name == "UpperTorso" or pose.Name == "Pelvis" or pose.Name == "Hips"
-				entry.Data[pose.Name] = { 
-					CFrame = pose.CFrame,
-					IsRoot = isRootPose
-				}
-			end
-		end
-		table.insert(seq, entry)
-	end
-	table.sort(seq, function(a, b) return a.Time < b.Time end)
-	return seq, kfs.Loop
+    local seq = {}
+    for _, frame in ipairs(kfs:GetKeyframes()) do
+        local entry = { Time = frame.Time, Data = {} }
+        for _, pose in ipairs(frame:GetDescendants()) do
+            if pose:IsA("Pose") and pose.Weight > 0 then
+                -- Check if this is a root pose
+                local isRootPose = pose.Name == "HumanoidRootPart" or pose.Name == "Torso" or 
+                                  pose.Name == "LowerTorso" or pose.Name == "UpperTorso"
+                entry.Data[pose.Name] = { 
+                    CFrame = pose.CFrame,
+                    IsRoot = isRootPose
+                }
+            end
+        end
+        table.insert(seq, entry)
+    end
+    table.sort(seq, function(a, b) return a.Time < b.Time end)
+    return seq, kfs.Loop
 end
 
--- ========== IMPROVED MOTOR MAP FOR CUSTOM MODELS ==========
+-- ========== SMART MOTOR DETECTION ==========
 local function BuildMotorMap(rig)
-	local map = {}
-	local lower = {}
-	local partToMotor = {}  -- Map part names to their motors
-	local motorParts = {}   -- Map motor names to their attached parts
-	
-	-- First pass: collect all Motor6Ds
-	for _, m in ipairs(rig:GetDescendants()) do
-		if m:IsA("Motor6D") then
-			local motorName = m.Name
-			map[motorName] = m
-			lower[string.lower(motorName)] = m
-			
-			-- Map the part that this motor moves
-			if m.Part1 then
-				local partName = m.Part1.Name
-				partToMotor[partName] = m
-				motorParts[motorName] = partName
-				
-				-- Also add part name as direct mapping
-				if not map[partName] then
-					map[partName] = m
-				end
-				
-				-- Add common variations
-				local lowerPartName = string.lower(partName)
-				if string.find(lowerPartName, "upperarm") then
-					if string.find(lowerPartName, "left") then
-						map["LeftUpperArm"] = m
-					elseif string.find(lowerPartName, "right") then
-						map["RightUpperArm"] = m
-					end
-				elseif string.find(lowerPartName, "lowerarm") then
-					if string.find(lowerPartName, "left") then
-						map["LeftLowerArm"] = m
-					elseif string.find(lowerPartName, "right") then
-						map["RightLowerArm"] = m
-					end
-				elseif string.find(lowerPartName, "uppertorso") then
-					map["UpperTorso"] = m
-				elseif string.find(lowerPartName, "lowertorso") then
-					map["LowerTorso"] = m
-				elseif string.find(lowerPartName, "head") then
-					map["Head"] = m
-				elseif string.find(lowerPartName, "neck") then
-					map["Neck"] = m
-				elseif string.find(lowerPartName, "root") or string.find(lowerPartName, "pelvis") then
-					map["Root"] = m
-				end
-			end
-		end
-	end
-	
-	-- Second pass: handle nested Motor6Ds in custom models
-	for _, m in ipairs(rig:GetDescendants()) do
-		if m:IsA("Motor6D") then
-			-- Check parent hierarchy for custom models
-			local current = m.Parent
-			while current and current ~= rig do
-				if current:IsA("BasePart") then
-					local partName = current.Name
-					-- Add parent part name mapping
-					if not map[partName] then
-						map[partName] = m
-					end
-				end
-				current = current.Parent
-			end
-		end
-	end
-	
-	-- Try to find root motor if not already found
-	if not map["Root"] and not map["RootJoint"] then
-		for motorName, motor in pairs(map) do
-			local lowerName = string.lower(motorName)
-			if string.find(lowerName, "root") or string.find(lowerName, "pelvis") or 
-			   string.find(lowerName, "hips") then
-				map["Root"] = motor
-				map["RootJoint"] = motor
-				break
-			end
-		end
-	end
-	
-	-- Try to find waist motor if not already found
-	if not map["Waist"] then
-		for motorName, motor in pairs(map) do
-			local lowerName = string.lower(motorName)
-			if string.find(lowerName, "waist") or string.find(lowerName, "spine") or 
-			   string.find(lowerName, "chest") or string.find(lowerName, "uppertorso") then
-				map["Waist"] = motor
-				break
-			end
-		end
-	end
-	
-	return map, lower, partToMotor, motorParts
+    local map = {}
+    local lower = {}
+    local partToMotor = {}
+    
+    -- First pass: collect all Motor6Ds
+    for _, m in ipairs(rig:GetDescendants()) do
+        if m:IsA("Motor6D") then
+            local motorName = m.Name
+            map[motorName] = m
+            lower[string.lower(motorName)] = m
+            
+            -- Map the part this motor controls
+            if m.Part1 then
+                local partName = m.Part1.Name
+                partToMotor[partName] = m
+                
+                -- Add part name as alias
+                if not map[partName] then
+                    map[partName] = m
+                end
+            end
+        end
+    end
+    
+    -- Second pass: try to identify key joints
+    local foundJoints = {}
+    
+    for motorName, motor in pairs(map) do
+        local lowerName = string.lower(motorName)
+        local partName = motor.Part1 and motor.Part1.Name or ""
+        local lowerPartName = string.lower(partName)
+        
+        -- Identify root/waist joints
+        if string.find(lowerName, "root") or string.find(lowerPartName, "root") or
+           string.find(lowerName, "pelvis") or string.find(lowerPartName, "pelvis") or
+           string.find(lowerName, "hips") or string.find(lowerPartName, "hips") then
+            foundJoints.Root = motor
+            foundJoints.RootJoint = motor
+        elseif string.find(lowerName, "waist") or string.find(lowerPartName, "waist") or
+               string.find(lowerName, "spine") or string.find(lowerPartName, "spine") or
+               string.find(lowerName, "chest") or string.find(lowerPartName, "chest") then
+            foundJoints.Waist = motor
+        elseif string.find(lowerName, "neck") or string.find(lowerPartName, "neck") then
+            foundJoints.Neck = motor
+        elseif string.find(lowerName, "shoulder") then
+            if string.find(lowerName, "left") then
+                foundJoints.LeftShoulder = motor
+            elseif string.find(lowerName, "right") then
+                foundJoints.RightShoulder = motor
+            end
+        elseif string.find(lowerName, "hip") then
+            if string.find(lowerName, "left") then
+                foundJoints.LeftHip = motor
+            elseif string.find(lowerName, "right") then
+                foundJoints.RightHip = motor
+            end
+        end
+    end
+    
+    -- Add identified joints to map
+    for jointName, motor in pairs(foundJoints) do
+        map[jointName] = motor
+        lower[string.lower(jointName)] = motor
+    end
+    
+    return map, lower, partToMotor
 end
 
 local function FindMotor(poseName, map, lower, isR15)
-	-- First try direct mapping
-	if map[poseName] then
-		return map[poseName]
-	end
-	
-	-- Try R15 mapping
-	if isR15 then
-		local r15Match = R15Map[poseName] or R15MapAlt[poseName]
-		if r15Match then
-			return map[r15Match] or lower[string.lower(r15Match)]
-		end
-	end
-	
-	-- Try case-insensitive search
-	local lowerPoseName = string.lower(poseName)
-	for key, motor in pairs(map) do
-		local lowerKey = string.lower(key)
-		if string.find(lowerKey, lowerPoseName) or string.find(lowerPoseName, lowerKey) then
-			return motor
-		end
-	end
-	
-	-- Try partial matching for custom models
-	for key, motor in pairs(map) do
-		local lowerKey = string.lower(key)
-		-- Check for common substrings
-		local patterns = {
-			"arm", "leg", "torso", "head", "neck", "shoulder", "hip", "knee", "elbow", "ankle", "wrist"
-		}
-		
-		for _, pattern in ipairs(patterns) do
-			if string.find(lowerPoseName, pattern) and string.find(lowerKey, pattern) then
-				-- Additional check for left/right alignment
-				local hasLeft = string.find(lowerPoseName, "left") and string.find(lowerKey, "left")
-				local hasRight = string.find(lowerPoseName, "right") and string.find(lowerKey, "right")
-				local hasNeither = not string.find(lowerPoseName, "left") and not string.find(lowerPoseName, "right") and
-								  not string.find(lowerKey, "left") and not string.find(lowerKey, "right")
-				
-				if hasLeft or hasRight or hasNeither then
-					return motor
-				end
-			end
-		end
-	end
-	
-	-- R6 mapping (fallback)
-	local match = R6Map[poseName] or poseName
-	return map[match] or lower[string.lower(match)]
+    -- Try direct mapping first
+    if map[poseName] then
+        return map[poseName]
+    end
+    
+    -- Try case-insensitive search
+    local lowerPoseName = string.lower(poseName)
+    for key, motor in pairs(map) do
+        if string.lower(key) == lowerPoseName then
+            return motor
+        end
+    end
+    
+    -- Try standard mappings based on rig type
+    if isR15 then
+        local r15Match = R15Map[poseName]
+        if r15Match and map[r15Match] then
+            return map[r15Match]
+        end
+    else
+        local r6Match = R6Map[poseName]
+        if r6Match and map[r6Match] then
+            return map[r6Match]
+        end
+    end
+    
+    -- Try partial matching for custom poses
+    for key, motor in pairs(map) do
+        local lowerKey = string.lower(key)
+        if string.find(lowerKey, lowerPoseName) or string.find(lowerPoseName, lowerKey) then
+            return motor
+        end
+    end
+    
+    return nil
 end
 
 -- ========== MINIMAL R15 CORRECTION ==========
 local function ApplyR15Correction(motor, origC0, dataCFrame, poseName, isR15)
-	if not isR15 then
-		return origC0 * dataCFrame
-	end
-	
-	-- Only apply correction to root/waist joints for forward direction
-	local motorName = motor.Name
-	if motorName == "Root" or motorName == "RootJoint" or motorName == "Waist" or 
-	   string.find(string.lower(motorName), "root") or string.find(string.lower(motorName), "waist") then
-		-- Check if this is a root pose
-		if poseName == "HumanoidRootPart" or poseName == "Torso" or poseName == "LowerTorso" or 
-		   poseName == "UpperTorso" or poseName == "Pelvis" or poseName == "Hips" then
-			-- Apply minimal correction only to fix forward direction
-			return origC0 * R15_Root_Correction * dataCFrame
-		end
-	end
-	
-	-- For all other joints, apply animation directly (no correction)
-	return origC0 * dataCFrame
-end
-
-local function FixR15RootMovement(rootCFrame)
-	-- Only apply 180-degree Y rotation to fix forward direction
-	return CFrame.new(rootCFrame.Position) * R15_Root_Correction * rootCFrame.Rotation
+    if not isR15 then
+        return origC0 * dataCFrame
+    end
+    
+    -- Only apply correction to root/waist joints
+    local motorName = motor.Name
+    local lowerName = string.lower(motorName)
+    
+    if string.find(lowerName, "root") or string.find(lowerName, "waist") or 
+       string.find(lowerName, "pelvis") or string.find(lowerName, "hips") then
+        if poseName == "HumanoidRootPart" or poseName == "Torso" or 
+           poseName == "LowerTorso" or poseName == "UpperTorso" then
+            return origC0 * R15_Root_Correction * dataCFrame
+        end
+    end
+    
+    return origC0 * dataCFrame
 end
 
 -- ========== ANIM PLAYER ==========
@@ -356,287 +352,242 @@ local AnimPlayer = {}
 AnimPlayer.__index = AnimPlayer
 
 function AnimPlayer.new(rig, kfs)
-	local self = setmetatable({}, AnimPlayer)
-	self.rig = rig
-	self.seq, self.looped = ConvertToTable(kfs)
-	self.map, self.lower, self.partToMotor, self.motorParts = BuildMotorMap(rig)
-	self.time, self.playing = 0, false
-	self.length = self.seq[#self.seq].Time
-	self.speed = 1
-	self.isR15 = IsR15(rig)
-	self.savedC0 = {}
-	
-	-- Debug: Show found motors
-	warn("[Animator6D] Found motors:")
-	for name, motor in pairs(self.map) do
-		if motor:IsA("Motor6D") then
-			local partName = motor.Part1 and motor.Part1.Name or "None"
-			warn("  - " .. name .. " -> " .. motor.Name .. " (Part: " .. partName .. ")")
-		end
-	end
-	
-	-- Find root motor
-	self.rootMotor = self.map["Root"] or self.map["RootJoint"] or self.map["Pelvis"] or self.map["Hips"]
-	
-	-- Save original C0 values
-	for _, m in pairs(self.map) do
-		if m:IsA("Motor6D") then
-			self.savedC0[m] = m.C0
-		end
-	end
-	
-	-- Handle R15 specific setup
-	if self.isR15 then
-		warn("[Animator6D] Detected R15 character - using custom model support")
-	end
-	
-	-- Store original root part state
-	if humanoidRootPart then
-		self.originalRootCFrame = humanoidRootPart.CFrame
-	end
-	
-	return self
+    local self = setmetatable({}, AnimPlayer)
+    self.rig = rig
+    self.seq, self.looped = ConvertToTable(kfs)
+    self.map, self.lower, self.partToMotor = BuildMotorMap(rig)
+    self.time, self.playing = 0, false
+    self.length = self.seq[#self.seq].Time
+    self.speed = 1
+    self.isR15 = IsR15(rig)
+    self.savedC0 = {}
+    
+    -- Debug info
+    warn("[Animator6D] Rig type:", self.isR15 and "R15" or "R6")
+    warn("[Animator6D] Model:", rig.Name)
+    
+    -- Save original C0 values
+    for _, m in pairs(self.map) do
+        if m:IsA("Motor6D") then
+            self.savedC0[m] = m.C0
+        end
+    end
+    
+    return self
 end
 
 function AnimPlayer:Play(speed, loop)
-	if self.playing then return end
-	self.playing, self.speed = true, speed or 1
-	self.looped = (loop == nil) and true or loop
-	
-	-- Store start time for root movement
-	self.startTime = tick()
-	self.lastFrameTime = tick()
-	
-	-- Track previous root CFrame for delta calculation
-	self.prevRootCFrame = nil
-	self.accumulatedRootDelta = CFrame.new()
+    if self.playing then return end
+    self.playing, self.speed = true, speed or 1
+    self.looped = (loop == nil) and true or loop
 
-	self.conn = RunService.Heartbeat:Connect(function(dt)
-		if not self.playing then return end
-		
-		local currentTime = tick()
-		local frameDelta = currentTime - self.lastFrameTime
-		self.lastFrameTime = currentTime
-		
-		self.time += dt * self.speed
+    self.conn = RunService.Heartbeat:Connect(function(dt)
+        if not self.playing then return end
+        self.time += dt * self.speed
 
-		if self.time > self.length then
-			if self.looped then
-				self.time -= self.length
-				-- Reset root delta on loop
-				self.accumulatedRootDelta = CFrame.new()
-			else
-				self:Stop(true)
-				return
-			end
-		end
+        if self.time > self.length then
+            if self.looped then
+                self.time -= self.length
+            else
+                self:Stop(true)
+                return
+            end
+        end
 
-		local prev = self.seq[1]
-		for i = 1, #self.seq do
-			if self.seq[i].Time <= self.time then
-				prev = self.seq[i]
-			else
-				break
-			end
-		end
+        local prev = self.seq[1]
+        for i = 1, #self.seq do
+            if self.seq[i].Time <= self.time then
+                prev = self.seq[i]
+            else
+                break
+            end
+        end
 
-		-- Track if we have root movement this frame
-		local hasRootMovement = false
-		local rootCFrame = nil
-		local rootPoseName = nil
-		
-		for joint, data in pairs(prev.Data) do
-			local motor = FindMotor(joint, self.map, self.lower, self.isR15)
-			if motor then
-				pcall(function()
-					if data.IsRoot then
-						-- This is a root movement pose
-						hasRootMovement = true
-						rootCFrame = data.CFrame
-						rootPoseName = joint
-						
-						-- Apply to root motor if it exists
-						if self.rootMotor then
-							self.rootMotor.C0 = ApplyR15Correction(self.rootMotor, self.savedC0[self.rootMotor], data.CFrame, joint, self.isR15)
-						end
-					else
-						-- Regular pose - apply animation directly
-						motor.C0 = ApplyR15Correction(motor, self.savedC0[motor], data.CFrame, joint, self.isR15)
-					end
-				end)
-			else
-				-- Try alternative search for custom model parts
-				local lowerJoint = string.lower(joint)
-				for motorName, motor in pairs(self.map) do
-					local lowerMotorName = string.lower(motorName)
-					if string.find(lowerMotorName, lowerJoint) or string.find(lowerJoint, lowerMotorName) then
-						pcall(function()
-							motor.C0 = ApplyR15Correction(motor, self.savedC0[motor], data.CFrame, joint, self.isR15)
-						end)
-						break
-					end
-				end
-			end
-		end
-		
-		-- Apply root movement if present (simplified for custom models)
-		if hasRootMovement and rootCFrame and humanoidRootPart then
-			if self.prevRootCFrame then
-				local delta = self.prevRootCFrame:Inverse() * rootCFrame
-				self.accumulatedRootDelta = self.accumulatedRootDelta * delta
-				
-				-- Apply movement to character (only horizontal)
-				local targetPosition = (self.originalRootCFrame * self.accumulatedRootDelta).Position
-				local horizontalTarget = Vector3.new(targetPosition.X, humanoidRootPart.Position.Y, targetPosition.Z)
-				
-				if (horizontalTarget - humanoidRootPart.Position).Magnitude > 0.1 then
-					local direction = (horizontalTarget - humanoidRootPart.Position).Unit
-					local distance = (horizontalTarget - humanoidRootPart.Position).Magnitude
-					local speed = math.min(distance / frameDelta, 30)
-					
-					humanoidRootPart.Velocity = direction * speed
-					hum:Move(direction * speed)
-				end
-			end
-			self.prevRootCFrame = rootCFrame
-		end
-	end)
+        for joint, data in pairs(prev.Data) do
+            local motor = FindMotor(joint, self.map, self.lower, self.isR15)
+            if motor then
+                pcall(function()
+                    motor.C0 = ApplyR15Correction(motor, self.savedC0[motor], data.CFrame, joint, self.isR15)
+                end)
+            end
+        end
+    end)
 end
 
 function AnimPlayer:Stop(restore)
-	self.playing = false
-	
-	if self.conn then 
-		self.conn:Disconnect() 
-		self.conn = nil 
-	end
-	
-	-- Reset root part velocity
-	if humanoidRootPart then
-		humanoidRootPart.Velocity = Vector3.new()
-	end
-	
-	if restore then
-		-- Restore motor positions
-		for motor, origC0 in pairs(self.savedC0) do
-			pcall(function() 
-				motor.C0 = origC0 
-			end)
-		end
-	else
-		-- Reset motor transforms
-		for _, m in pairs(self.map) do
-			if m:IsA("Motor6D") then
-				pcall(function() 
-					m.Transform = CFrame.new() 
-				end)
-			end
-		end
-	end
-	
-	-- Reset accumulated root delta
-	self.accumulatedRootDelta = CFrame.new()
-	self.prevRootCFrame = nil
+    self.playing = false
+    if self.conn then self.conn:Disconnect() self.conn = nil end
+    
+    if restore then
+        for motor, origC0 in pairs(self.savedC0) do
+            pcall(function() motor.C0 = origC0 end)
+        end
+    else
+        for _, m in pairs(self.map) do
+            if m:IsA("Motor6D") then
+                pcall(function() m.Transform = CFrame.new() end)
+            end
+        end
+    end
 end
 
 -- ========== DISABLE DEFAULT ANIMS ==========
-local function disableDefaultAnimations(char)
-	if not hum then return end
-	for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
-		track:Stop(0)
-	end
-	local animScript = char:FindFirstChild("Animate")
-	if animScript then animScript.Disabled = true end
-	local animator = hum:FindFirstChildOfClass("Animator")
-	if animator then animator:Destroy() end
+local function disableDefaultAnimations(model)
+    if not model then return end
+    
+    -- Check for humanoid first
+    local modelHum = model:FindFirstChildOfClass("Humanoid")
+    if modelHum then
+        for _, track in ipairs(modelHum:GetPlayingAnimationTracks()) do
+            track:Stop(0)
+        end
+        
+        local animScript = model:FindFirstChild("Animate")
+        if animScript then animScript.Disabled = true end
+        
+        local animator = modelHum:FindFirstChildOfClass("Animator")
+        if animator then animator:Destroy() end
+    end
 end
 
--- ========== CUSTOM MODEL SUPPORT ==========
-getgenv().Animator6DUseCustomModel = function(model)
-	if not model or not model:IsA("Model") then
-		warn("[Animator6D] Invalid model provided")
-		return
-	end
-	
-	-- Set the custom model as the character to animate
-	character = model
-	hum = model:FindFirstChildOfClass("Humanoid") or model:WaitForChild("Humanoid")
-	humanoidRootPart = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
-	
-	warn("[Animator6D] Using custom model:", model.Name)
+-- ========== MODEL MANAGEMENT ==========
+local function RefreshCharacter()
+    UpdateCharacter()
+    
+    -- If current animation is playing, restart it on new character
+    if getgenv().currentAnimator6D and getgenv().currentAnimator6D.playing then
+        local currentAnim = getgenv().currentAnimator6D
+        local animId = currentAnim.animId
+        local speed = currentAnim.speed
+        local looped = currentAnim.looped
+        
+        currentAnim:Stop(false)
+        
+        if animId then
+            task.wait(0.1)
+            getgenv().Animator6D(animId, speed, looped)
+        end
+    end
 end
 
 -- ========== GLOBAL INTERFACE ==========
 getgenv().Animator6D = function(idOrInstance, speed, looped)
-	local kfs
-	if typeof(idOrInstance) == "Instance" then
-		kfs = idOrInstance:IsA("KeyframeSequence") and idOrInstance or idOrInstance:FindFirstChildOfClass("KeyframeSequence")
-	else
-		local asset = LoadLocalAsset(idOrInstance)
-		if asset then
-			kfs = asset:FindFirstChildOfClass("KeyframeSequence") or asset
-		end
-	end
+    -- Refresh character reference
+    RefreshCharacter()
+    
+    if not character then
+        warn("[Animator6D] No character/model available")
+        return
+    end
+    
+    local kfs
+    if typeof(idOrInstance) == "Instance" then
+        kfs = idOrInstance:IsA("KeyframeSequence") and idOrInstance or idOrInstance:FindFirstChildOfClass("KeyframeSequence")
+    else
+        local asset = LoadLocalAsset(idOrInstance)
+        if asset then
+            kfs = asset:FindFirstChildOfClass("KeyframeSequence") or asset
+        end
+    end
 
-	if not kfs then
-		warn("[Animator6D] yo sorry could not load animation:", idOrInstance)
-		return
-	end
+    if not kfs then
+        warn("[Animator6D] Could not load animation:", idOrInstance)
+        return
+    end
 
-	disableDefaultAnimations(character)
+    disableDefaultAnimations(character)
 
-	if getgenv().currentAnimator6D then
-		pcall(function()
-			getgenv().currentAnimator6D:Stop(true)
-		end)
-	end
+    if getgenv().currentAnimator6D then
+        pcall(function()
+            getgenv().currentAnimator6D:Stop(true)
+        end)
+    end
 
-	local anim = AnimPlayer.new(character, kfs)
-	getgenv().currentAnimator6D = anim
-	anim.animId = typeof(idOrInstance) == "number" and idOrInstance or nil
-	anim.speed = speed or 1
-	anim.looped = looped
-	anim:Play(speed or 1, looped)
-	
-	warn("[Animator6D] Playing animation on", GetRigType(), "character:", character.Name)
+    local anim = AnimPlayer.new(character, kfs)
+    getgenv().currentAnimator6D = anim
+    anim.animId = typeof(idOrInstance) == "number" and idOrInstance or nil
+    anim.speed = speed or 1
+    anim.looped = looped
+    anim:Play(speed or 1, looped)
+    
+    warn("[Animator6D] Playing animation on", GetRigType(), "model:", character.Name)
 end
 
 getgenv().Animator6DStop = function()
-	if getgenv().currentAnimator6D then
-		pcall(function() getgenv().currentAnimator6D:Stop(true) end)
-		getgenv().currentAnimator6D = nil
-	end
+    if getgenv().currentAnimator6D then
+        pcall(function() getgenv().currentAnimator6D:Stop(true) end)
+        getgenv().currentAnimator6D = nil
+    end
 end
 
--- ========== NOTIFY ==========
-warn("[Animator6D Pro V4] ya.. Allah hotbar")
-warn("[Animator6D Pro V4] Now with custom R15 model support!")
+getgenv().Animator6DRefresh = function()
+    RefreshCharacter()
+    warn("[Animator6D] Refreshed character/model")
+end
+
+-- ========== AUTO REFRESH ON CHARACTER CHANGE ==========
+-- Listen for player character changes
+player.CharacterAdded:Connect(function(char)
+    task.wait(0.5) -- Wait for character to fully load
+    RefreshCharacter()
+end)
+
+-- Periodically check for model changes
+spawn(function()
+    while true do
+        task.wait(2)
+        
+        -- Check if current character still exists
+        if character and not character.Parent then
+            warn("[Animator6D] Current model removed, refreshing...")
+            RefreshCharacter()
+        end
+    end
+end)
+
+-- ========== INITIAL NOTIFICATION ==========
+warn("[Animator6D Pro V4] Loaded successfully!")
+warn("[Animator6D Pro V4] Now supports player-controlled custom models!")
+warn("[Animator6D Pro V4] Features:")
+warn("- Auto-detects player custom models")
+warn("- Universal R6/R15 support")
+warn("- Smart motor detection")
+warn("- Auto-refresh on model changes")
+
 pcall(function()
-	game:GetService("StarterGui"):SetCore("SendNotification", {
-		Title = "Animator6D Pro V4",
-		Text = "Loaded with custom R15 model support!",
-		Duration = 5
-	})
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "Animator6D Pro V4",
+        Text = "Loaded! Supports player custom models",
+        Duration = 5
+    })
 end)
 
 --
 --[[
-(pls, If ur down here, read these instructions)
+====================================================================
+INSTRUCTIONS:
 
-FOR CUSTOM MODELS (like your Glamrock Freddy):
-1. First, set your custom model:
-   getgenv().Animator6DUseCustomModel(workspace.O49_R.GlamrockFreddy)
-   
-2. Then play animations:
-   getgenv().Animator6D(1234567890, 1, true)
+AUTOMATIC MODE (Recommended):
+- Script automatically detects your player's current model
+- Works with standard R6/R15 characters
+- Works with custom player models (like equipped costumes)
+- Automatically refreshes when you change models
 
-OR for standard player character:
-getgenv().Animator6D(1234567890, 1, true) -- idOrInstance, Speed, Looped? --
+USAGE:
+1. Play animation:
+   getgenv().Animator6D(1234567890, 1, true) -- ID, Speed, Looped
 
-If u will be using an instance and not an ID, then:
-local animInstance = game:GetObjects("rbxassetid://ID")[1]..Here the KeyframeSequence Path -- replace ID with the ID --
-getgenv().Animator6D(animInstance, 1, true) -- or false if u want the anim to have a loop
+2. Stop animation:
+   getgenv().Animator6DStop()
 
-If u want to stop the anim outside ts loadstring, then:
-getgenv().Animator6DStop()
+3. Force refresh (if model changes aren't detected):
+   getgenv().Animator6DRefresh()
+
+MANUAL OVERRIDE (Advanced):
+If you want to manually specify a model:
+   character = workspace.YourModel
+   hum = character:FindFirstChildOfClass("Humanoid")
+   getgenv().Animator6D(ANIMATION_ID, 1, true)
+
+====================================================================
 --]]
