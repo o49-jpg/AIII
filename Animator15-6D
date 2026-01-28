@@ -1,6 +1,6 @@
 --//====================================================\\--
---||           Animator6D Pro V6 (Universal)           ||--
---||  Features: R6/R15 auto-detection + Trim Support   ||--
+--||           Animator6D Pro V6.1 (Universal)         ||--
+--||        Fixed Version - Proper Pose Handling       ||--
 --\\====================================================//--
 
 if getgenv().Animator6DLoadedPro then return end
@@ -67,7 +67,7 @@ local function LoadLocalAsset(id)
 end
 -- ===============================================
 
--- ========== KEYFRAME PARSER ==========
+-- ========== FIXED KEYFRAME PARSER ==========
 local function ConvertToTable(kfs, startTime, endTime)
     if not (kfs and typeof(kfs) == "Instance" and kfs:IsA("KeyframeSequence")) then
         if typeof(kfs) == "Instance" then
@@ -85,7 +85,6 @@ local function ConvertToTable(kfs, startTime, endTime)
     local seq = {}
     local frames = kfs:GetKeyframes()
     
-    -- Apply trimming if startTime/endTime provided
     for _, frame in ipairs(frames) do
         -- Skip frames outside trim range
         if startTime and frame.Time < startTime then
@@ -98,7 +97,7 @@ local function ConvertToTable(kfs, startTime, endTime)
         local entry = { 
             Time = frame.Time,
             OriginalTime = frame.Time,
-            Data = {} 
+            Poses = {}  -- CHANGED: Use Poses instead of Data
         }
         
         -- Adjust time if startTime is specified
@@ -106,17 +105,33 @@ local function ConvertToTable(kfs, startTime, endTime)
             entry.Time = frame.Time - startTime
         end
         
-        for _, pose in ipairs(frame:GetDescendants()) do
+        -- FIXED: Actually get poses from the frame
+        for _, pose in ipairs(frame:GetChildren()) do
             if pose:IsA("Pose") and pose.Weight > 0 then
-                entry.Data[pose.Name] = { CFrame = pose.CFrame }
+                entry.Poses[pose.Name] = { 
+                    CFrame = pose.CFrame,
+                    Weight = pose.Weight
+                }
             end
         end
+        
+        -- Also check for AttachmentPose (R15 accessories)
+        for _, pose in ipairs(frame:GetChildren()) do
+            if pose:IsA("AttachmentPose") and pose.Weight > 0 then
+                entry.Poses[pose.Name] = { 
+                    CFrame = pose.CFrame,
+                    Weight = pose.Weight,
+                    IsAttachment = true
+                }
+            end
+        end
+        
         table.insert(seq, entry)
     end
     
     -- If trimmed and no frames at time 0, add a dummy frame
     if startTime and startTime > 0 and (#seq == 0 or seq[1].Time > 0) then
-        table.insert(seq, 1, { Time = 0, Data = {}, OriginalTime = startTime })
+        table.insert(seq, 1, { Time = 0, Poses = {}, OriginalTime = startTime })
     end
     
     table.sort(seq, function(a, b) return a.Time < b.Time end)
@@ -125,7 +140,6 @@ end
 
 -- ========== TRIM UTILITY FUNCTIONS ==========
 local function CreateTrimmedKeyframeSequence(kfs, startTime, endTime)
-    -- Creates a new KeyframeSequence with only frames between startTime and endTime
     local newKfs = Instance.new("KeyframeSequence")
     newKfs.Name = "Trimmed_" .. kfs.Name
     newKfs.Priority = kfs.Priority
@@ -135,12 +149,11 @@ local function CreateTrimmedKeyframeSequence(kfs, startTime, endTime)
     for _, frame in ipairs(frames) do
         if frame.Time >= startTime and frame.Time <= endTime then
             local newFrame = frame:Clone()
-            newFrame.Time = frame.Time - startTime  -- Normalize to start at 0
+            newFrame.Time = frame.Time - startTime
             newFrame.Parent = newKfs
         end
     end
     
-    -- Ensure we have at least one frame
     if #newKfs:GetChildren() == 0 then
         local dummyFrame = Instance.new("Keyframe")
         dummyFrame.Time = 0
@@ -151,7 +164,6 @@ local function CreateTrimmedKeyframeSequence(kfs, startTime, endTime)
 end
 
 local function AnalyzeAnimation(kfs)
-    -- Returns information about the animation for debugging
     local frames = kfs:GetKeyframes()
     local info = {
         frameCount = #frames,
@@ -160,8 +172,13 @@ local function AnalyzeAnimation(kfs)
     }
     
     for i, frame in ipairs(frames) do
+        -- FIXED: Count actual poses
         local poseCount = 0
-        for _ in pairs(frame.Data or {}) do poseCount = poseCount + 1 end
+        for _, child in ipairs(frame:GetChildren()) do
+            if child:IsA("Pose") or child:IsA("AttachmentPose") then
+                poseCount = poseCount + 1
+            end
+        end
         
         table.insert(info.frames, {
             time = frame.Time,
@@ -305,14 +322,15 @@ function AnimPlayer:Play(speed, loop)
             end
         end
 
-        for joint, data in pairs(prev.Data) do
-            local motor = FindMotor(joint, self.map, self.lower)
-            if motor then
+        -- FIXED: Use Poses instead of Data
+        for poseName, poseData in pairs(prev.Poses) do
+            local motor = FindMotor(poseName, self.map, self.lower)
+            if motor and poseData.CFrame then
                 pcall(function()
                     if motor:IsA("Motor6D") then
-                        motor.C0 = self.savedC0[motor] * data.CFrame
+                        motor.C0 = self.savedC0[motor] * poseData.CFrame
                     elseif motor:IsA("Attachment") and RIG_TYPE == "R15" then
-                        motor.WorldCFrame = data.CFrame
+                        motor.WorldCFrame = poseData.CFrame
                     end
                 end)
             end
@@ -355,7 +373,7 @@ local function disableDefaultAnimations(char)
     if animator then animator:Destroy() end
 end
 
--- ========== GLOBAL INTERFACE WITH TRIM SUPPORT ==========
+-- ========== GLOBAL INTERFACE ==========
 getgenv().Animator6D = function(idOrInstance, speed, looped, startTime, endTime)
     local kfs
     if typeof(idOrInstance) == "Instance" then
@@ -372,7 +390,6 @@ getgenv().Animator6D = function(idOrInstance, speed, looped, startTime, endTime)
         return
     end
 
-    -- Debug info for trimming
     if startTime or endTime then
         local frames = kfs:GetKeyframes()
         local totalTime = frames[#frames] and frames[#frames].Time or 0
@@ -395,12 +412,12 @@ getgenv().Animator6D = function(idOrInstance, speed, looped, startTime, endTime)
     return anim
 end
 
--- NEW: Trim-specific function
+-- Trim-specific function
 getgenv().Animator6DTrim = function(idOrInstance, startTime, endTime, speed, looped)
     return getgenv().Animator6D(idOrInstance, speed or 1, looped == nil and true or looped, startTime, endTime)
 end
 
--- NEW: Animation analyzer
+-- Animation analyzer
 getgenv().Animator6DAnalyze = function(idOrInstance)
     local kfs
     if typeof(idOrInstance) == "Instance" then
@@ -428,11 +445,11 @@ getgenv().Animator6DAnalyze = function(idOrInstance)
         print(string.format("  Frame %d: %.3fs - %d poses", i, frame.time, frame.poseCount))
     end
     
-    -- Find gaps (potential branch points)
+    -- Find gaps
     local gaps = {}
     for i = 2, #info.frames do
         local gap = info.frames[i].time - info.frames[i-1].time
-        if gap > 0.5 then  -- Gaps larger than 0.5 seconds
+        if gap > 0.5 then
             table.insert(gaps, {
                 from = info.frames[i-1].time,
                 to = info.frames[i].time,
@@ -467,31 +484,11 @@ player.CharacterAdded:Connect(function(newChar)
 end)
 
 -- ========== NOTIFY ==========
-warn("[Animator6D Pro V6] Loaded with Trim Support!")
+warn("[Animator6D Pro V6.1] Loaded with Fixed Pose Handling!")
 pcall(function()
     game:GetService("StarterGui"):SetCore("SendNotification", {
-        Title = "Animator6D Pro V6",
-        Text = "Loaded with Animation Trimming!",
+        Title = "Animator6D Pro V6.1",
+        Text = "Fixed Pose Handling + Trimming!",
         Duration = 5
     })
 end)
-
---[[
-USAGE WITH TRIMMING:
-
--- Regular animation
-getgenv().Animator6D(1234567890, 1, true)
-
--- Trimmed animation (0.5s to 3.5s)
-getgenv().Animator6DTrim(1234567890, 0.5, 3.5, 1, true)
-
--- Or using extended parameters
-getgenv().Animator6D(1234567890, 1, true, 0.5, 3.5)
-
--- Analyze an animation
-getgenv().Animator6DAnalyze(1234567890)
-
--- Your specific animation with trimming
-getgenv().Animator6DTrim(75190685223546, 0, 2.5, 1, false)  -- First part only
-getgenv().Animator6DTrim(75190685223546, 2.5, 4.8, 1, false) -- Middle part
-]]
