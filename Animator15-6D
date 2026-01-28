@@ -1,7 +1,6 @@
 --//====================================================\\--
---||           Animator6D Pro V5 (Universal)           ||--
---||  Author: gObl00x + GPT-5 + R15 Adaptation        ||--
---||  Features: R6/R15 auto-detection, universal rig   ||--
+--||           Animator6D Pro V6 (Universal)           ||--
+--||  Features: R6/R15 auto-detection + Trim Support   ||--
 --\\====================================================//--
 
 if getgenv().Animator6DLoadedPro then return end
@@ -21,7 +20,6 @@ local function GetRigType()
     elseif hum.RigType == Enum.HumanoidRigType.R15 then
         return "R15"
     end
-    -- Fallback detection
     if character:FindFirstChild("UpperTorso") then
         return "R15"
     else
@@ -69,56 +67,8 @@ local function LoadLocalAsset(id)
 end
 -- ===============================================
 
--- ========== JOINT MAPPING (R6 & R15) ==========
-local R6JointMap = {
-    ["Head"] = "Neck",
-    ["Torso"] = "RootJoint",
-    ["Right Arm"] = "Right Shoulder",
-    ["Left Arm"] = "Left Shoulder",
-    ["Right Leg"] = "Right Hip",
-    ["Left Leg"] = "Left Hip"
-}
-
-local R15JointMap = {
-    -- Head/Neck
-    ["Head"] = "Neck",
-    
-    -- Torso/Spine
-    ["UpperTorso"] = "Waist",
-    ["LowerTorso"] = "RootJoint",
-    
-    -- Arms
-    ["RightUpperArm"] = "RightShoulder",
-    ["RightLowerArm"] = "RightElbow",
-    ["RightHand"] = "RightWrist",
-    
-    ["LeftUpperArm"] = "LeftShoulder",
-    ["LeftLowerArm"] = "LeftElbow",
-    ["LeftHand"] = "LeftWrist",
-    
-    -- Legs
-    ["RightUpperLeg"] = "RightHip",
-    ["RightLowerLeg"] = "RightKnee",
-    ["RightFoot"] = "RightAnkle",
-    
-    ["LeftUpperLeg"] = "LeftHip",
-    ["LeftLowerLeg"] = "LeftKnee",
-    ["LeftFoot"] = "LeftAnkle"
-}
-
--- Special handling for R15 accessories
-local R15AccessoryMap = {
-    ["Hat"] = "HatAttachment",
-    ["Hair"] = "HairAttachment",
-    ["Face"] = "FaceFrontAttachment"
-}
-
-local function GetJointMap()
-    return RIG_TYPE == "R6" and R6JointMap or R15JointMap
-end
-
 -- ========== KEYFRAME PARSER ==========
-local function ConvertToTable(kfs)
+local function ConvertToTable(kfs, startTime, endTime)
     if not (kfs and typeof(kfs) == "Instance" and kfs:IsA("KeyframeSequence")) then
         if typeof(kfs) == "Instance" then
             for _, obj in ipairs(kfs:GetDescendants()) do
@@ -133,32 +83,127 @@ local function ConvertToTable(kfs)
     assert(kfs and typeof(kfs) == "Instance" and kfs:IsA("KeyframeSequence"), "Expected KeyframeSequence")
 
     local seq = {}
-    for _, frame in ipairs(kfs:GetKeyframes()) do
-        local entry = { Time = frame.Time, Data = {} }
+    local frames = kfs:GetKeyframes()
+    
+    -- Apply trimming if startTime/endTime provided
+    for _, frame in ipairs(frames) do
+        -- Skip frames outside trim range
+        if startTime and frame.Time < startTime then
+            continue
+        end
+        if endTime and frame.Time > endTime then
+            continue
+        end
+        
+        local entry = { 
+            Time = frame.Time,
+            OriginalTime = frame.Time,
+            Data = {} 
+        }
+        
+        -- Adjust time if startTime is specified
+        if startTime then
+            entry.Time = frame.Time - startTime
+        end
+        
         for _, pose in ipairs(frame:GetDescendants()) do
             if pose:IsA("Pose") and pose.Weight > 0 then
-                -- Handle both regular poses and accessory poses
-                local poseName = pose.Name
-                if pose:IsA("AttachmentPose") then
-                    -- For R15 accessory poses, map to the correct attachment
-                    if R15AccessoryMap[poseName] then
-                        poseName = R15AccessoryMap[poseName]
-                    end
-                end
-                entry.Data[poseName] = { CFrame = pose.CFrame }
+                entry.Data[pose.Name] = { CFrame = pose.CFrame }
             end
         end
         table.insert(seq, entry)
     end
+    
+    -- If trimmed and no frames at time 0, add a dummy frame
+    if startTime and startTime > 0 and (#seq == 0 or seq[1].Time > 0) then
+        table.insert(seq, 1, { Time = 0, Data = {}, OriginalTime = startTime })
+    end
+    
     table.sort(seq, function(a, b) return a.Time < b.Time end)
     return seq, kfs.Loop
 end
 
+-- ========== TRIM UTILITY FUNCTIONS ==========
+local function CreateTrimmedKeyframeSequence(kfs, startTime, endTime)
+    -- Creates a new KeyframeSequence with only frames between startTime and endTime
+    local newKfs = Instance.new("KeyframeSequence")
+    newKfs.Name = "Trimmed_" .. kfs.Name
+    newKfs.Priority = kfs.Priority
+    newKfs.Loop = kfs.Loop
+    
+    local frames = kfs:GetKeyframes()
+    for _, frame in ipairs(frames) do
+        if frame.Time >= startTime and frame.Time <= endTime then
+            local newFrame = frame:Clone()
+            newFrame.Time = frame.Time - startTime  -- Normalize to start at 0
+            newFrame.Parent = newKfs
+        end
+    end
+    
+    -- Ensure we have at least one frame
+    if #newKfs:GetChildren() == 0 then
+        local dummyFrame = Instance.new("Keyframe")
+        dummyFrame.Time = 0
+        dummyFrame.Parent = newKfs
+    end
+    
+    return newKfs
+end
+
+local function AnalyzeAnimation(kfs)
+    -- Returns information about the animation for debugging
+    local frames = kfs:GetKeyframes()
+    local info = {
+        frameCount = #frames,
+        totalDuration = frames[#frames] and frames[#frames].Time or 0,
+        frames = {}
+    }
+    
+    for i, frame in ipairs(frames) do
+        local poseCount = 0
+        for _ in pairs(frame.Data or {}) do poseCount = poseCount + 1 end
+        
+        table.insert(info.frames, {
+            time = frame.Time,
+            poseCount = poseCount,
+            hasPoses = poseCount > 0
+        })
+    end
+    
+    return info
+end
+
 -- ========== MOTOR MAP ==========
+local R6JointMap = {
+    ["Head"] = "Neck",
+    ["Torso"] = "RootJoint",
+    ["Right Arm"] = "Right Shoulder",
+    ["Left Arm"] = "Left Shoulder",
+    ["Right Leg"] = "Right Hip",
+    ["Left Leg"] = "Left Hip"
+}
+
+local R15JointMap = {
+    ["Head"] = "Neck",
+    ["UpperTorso"] = "Waist",
+    ["LowerTorso"] = "RootJoint",
+    ["RightUpperArm"] = "RightShoulder",
+    ["RightLowerArm"] = "RightElbow",
+    ["RightHand"] = "RightWrist",
+    ["LeftUpperArm"] = "LeftShoulder",
+    ["LeftLowerArm"] = "LeftElbow",
+    ["LeftHand"] = "LeftWrist",
+    ["RightUpperLeg"] = "RightHip",
+    ["RightLowerLeg"] = "RightKnee",
+    ["RightFoot"] = "RightAnkle",
+    ["LeftUpperLeg"] = "LeftHip",
+    ["LeftLowerLeg"] = "LeftKnee",
+    ["LeftFoot"] = "LeftAnkle"
+}
+
 local function BuildMotorMap(rig)
     local map, lower, allMotors = {}, {}, {}
     
-    -- Collect all Motor6D joints
     for _, m in ipairs(rig:GetDescendants()) do
         if m:IsA("Motor6D") then
             map[m.Name] = m
@@ -167,7 +212,6 @@ local function BuildMotorMap(rig)
         end
     end
     
-    -- For R15, also handle accessories and their attachments
     if RIG_TYPE == "R15" then
         for _, accessory in ipairs(rig:GetDescendants()) do
             if accessory:IsA("Accessory") then
@@ -188,15 +232,12 @@ local function BuildMotorMap(rig)
 end
 
 local function FindMotor(poseName, map, lower)
-    local jointMap = GetJointMap()
+    local jointMap = RIG_TYPE == "R6" and R6JointMap or R15JointMap
     local match = jointMap[poseName] or poseName
     
-    -- Try direct map first
     local motor = map[match] or lower[string.lower(match)]
     
-    -- If not found, try some common variations
     if not motor and RIG_TYPE == "R15" then
-        -- Handle R15 part name variations
         local variations = {
             [poseName .. "RigAttachment"] = poseName,
             [poseName .. "Attachment"] = poseName,
@@ -216,18 +257,19 @@ end
 local AnimPlayer = {}
 AnimPlayer.__index = AnimPlayer
 
-function AnimPlayer.new(rig, kfs)
+function AnimPlayer.new(rig, kfs, startTime, endTime)
     local self = setmetatable({}, AnimPlayer)
     self.rig = rig
-    self.seq, self.looped = ConvertToTable(kfs)
+    self.seq, self.looped = ConvertToTable(kfs, startTime, endTime)
     self.map, self.lower, self.allMotors = BuildMotorMap(rig)
     self.time, self.playing = 0, false
-    self.length = self.seq[#self.seq].Time
+    self.length = self.seq[#self.seq] and self.seq[#self.seq].Time or 0
     self.speed = 1
     self.savedC0 = {}
     self.savedTransforms = {}
+    self.trimStart = startTime or 0
+    self.trimEnd = endTime
     
-    -- Save original transforms for all motors
     for _, motor in ipairs(self.allMotors) do
         self.savedC0[motor] = motor.C0
         self.savedTransforms[motor] = motor.Transform
@@ -243,36 +285,33 @@ function AnimPlayer:Play(speed, loop)
 
     self.conn = RunService.Heartbeat:Connect(function(dt)
         if not self.playing then return end
-        self.time += dt * self.speed
+        self.time = self.time + (dt * self.speed)
 
         if self.time > self.length then
             if self.looped then
-                self.time -= self.length
+                self.time = self.time - self.length
             else
                 self:Stop(true)
                 return
             end
         end
 
-        -- Find current keyframe
-        local currentFrame = self.seq[1]
+        local prev = self.seq[1]
         for i = 1, #self.seq do
             if self.seq[i].Time <= self.time then
-                currentFrame = self.seq[i]
+                prev = self.seq[i]
             else
                 break
             end
         end
 
-        -- Apply poses
-        for joint, data in pairs(currentFrame.Data) do
+        for joint, data in pairs(prev.Data) do
             local motor = FindMotor(joint, self.map, self.lower)
             if motor then
                 pcall(function()
                     if motor:IsA("Motor6D") then
                         motor.C0 = self.savedC0[motor] * data.CFrame
                     elseif motor:IsA("Attachment") and RIG_TYPE == "R15" then
-                        -- Handle R15 accessory attachments
                         motor.WorldCFrame = data.CFrame
                     end
                 end)
@@ -286,7 +325,6 @@ function AnimPlayer:Stop(restore)
     if self.conn then self.conn:Disconnect() self.conn = nil end
     
     if restore then
-        -- Restore original C0 values
         for motor, origC0 in pairs(self.savedC0) do
             pcall(function() 
                 if motor:IsA("Motor6D") then
@@ -295,7 +333,6 @@ function AnimPlayer:Stop(restore)
             end)
         end
     else
-        -- Reset transforms to identity
         for motor, origTransform in pairs(self.savedTransforms) do
             pcall(function() 
                 if motor:IsA("Motor6D") then
@@ -318,16 +355,8 @@ local function disableDefaultAnimations(char)
     if animator then animator:Destroy() end
 end
 
--- ========== CHARACTER REINIT ON RESPAWN ==========
-player.CharacterAdded:Connect(function(newChar)
-    character = newChar
-    hum = character:WaitForChild("Humanoid")
-    RIG_TYPE = GetRigType()
-    warn("[Animator6D] Character respawned, rig type:", RIG_TYPE)
-end)
-
--- ========== GLOBAL INTERFACE ==========
-getgenv().Animator6D = function(idOrInstance, speed, looped)
+-- ========== GLOBAL INTERFACE WITH TRIM SUPPORT ==========
+getgenv().Animator6D = function(idOrInstance, speed, looped, startTime, endTime)
     local kfs
     if typeof(idOrInstance) == "Instance" then
         kfs = idOrInstance:IsA("KeyframeSequence") and idOrInstance or idOrInstance:FindFirstChildOfClass("KeyframeSequence")
@@ -343,6 +372,14 @@ getgenv().Animator6D = function(idOrInstance, speed, looped)
         return
     end
 
+    -- Debug info for trimming
+    if startTime or endTime then
+        local frames = kfs:GetKeyframes()
+        local totalTime = frames[#frames] and frames[#frames].Time or 0
+        warn(string.format("[Animator6D] Trimming: %.2fs to %.2fs (total: %.2fs)", 
+            startTime or 0, endTime or totalTime, totalTime))
+    end
+
     disableDefaultAnimations(character)
 
     if getgenv().currentAnimator6D then
@@ -351,9 +388,67 @@ getgenv().Animator6D = function(idOrInstance, speed, looped)
         end)
     end
 
-    local anim = AnimPlayer.new(character, kfs)
+    local anim = AnimPlayer.new(character, kfs, startTime, endTime)
     getgenv().currentAnimator6D = anim
     anim:Play(speed or 1, looped)
+    
+    return anim
+end
+
+-- NEW: Trim-specific function
+getgenv().Animator6DTrim = function(idOrInstance, startTime, endTime, speed, looped)
+    return getgenv().Animator6D(idOrInstance, speed or 1, looped == nil and true or looped, startTime, endTime)
+end
+
+-- NEW: Animation analyzer
+getgenv().Animator6DAnalyze = function(idOrInstance)
+    local kfs
+    if typeof(idOrInstance) == "Instance" then
+        kfs = idOrInstance:IsA("KeyframeSequence") and idOrInstance or idOrInstance:FindFirstChildOfClass("KeyframeSequence")
+    else
+        local asset = LoadLocalAsset(idOrInstance)
+        if asset then
+            kfs = asset:FindFirstChildOfClass("KeyframeSequence") or asset
+        end
+    end
+    
+    if not kfs then
+        warn("[Animator6D] Could not load animation for analysis")
+        return
+    end
+    
+    local info = AnalyzeAnimation(kfs)
+    
+    print("=== Animation Analysis ===")
+    print("Total frames:", info.frameCount)
+    print("Total duration:", info.totalDuration .. "s")
+    print("\nFrame breakdown:")
+    
+    for i, frame in ipairs(info.frames) do
+        print(string.format("  Frame %d: %.3fs - %d poses", i, frame.time, frame.poseCount))
+    end
+    
+    -- Find gaps (potential branch points)
+    local gaps = {}
+    for i = 2, #info.frames do
+        local gap = info.frames[i].time - info.frames[i-1].time
+        if gap > 0.5 then  -- Gaps larger than 0.5 seconds
+            table.insert(gaps, {
+                from = info.frames[i-1].time,
+                to = info.frames[i].time,
+                duration = gap
+            })
+        end
+    end
+    
+    if #gaps > 0 then
+        print("\nPotential branch points (gaps > 0.5s):")
+        for i, gap in ipairs(gaps) do
+            print(string.format("  Gap %d: %.3fs to %.3fs (%.3fs gap)", i, gap.from, gap.to, gap.duration))
+        end
+    end
+    
+    return info
 end
 
 getgenv().Animator6DStop = function()
@@ -363,42 +458,40 @@ getgenv().Animator6DStop = function()
     end
 end
 
--- ========== UTILITY FUNCTIONS ==========
-getgenv().Animator6DGetRigType = function()
-    return RIG_TYPE
-end
-
-getgenv().Animator6DSetSpeed = function(speed)
-    if getgenv().currentAnimator6D then
-        getgenv().currentAnimator6D.speed = speed or 1
-    end
-end
+-- ========== CHARACTER REINIT ==========
+player.CharacterAdded:Connect(function(newChar)
+    character = newChar
+    hum = character:WaitForChild("Humanoid")
+    RIG_TYPE = GetRigType()
+    warn("[Animator6D] Character respawned, rig type:", RIG_TYPE)
+end)
 
 -- ========== NOTIFY ==========
-warn("[Animator6D Pro V5] Universal R6/R15 Loaded!")
+warn("[Animator6D Pro V6] Loaded with Trim Support!")
 pcall(function()
     game:GetService("StarterGui"):SetCore("SendNotification", {
-        Title = "Animator6D Pro V5",
-        Text = "Universal R6/R15 Support Enabled!",
+        Title = "Animator6D Pro V6",
+        Text = "Loaded with Animation Trimming!",
         Duration = 5
     })
 end)
 
 --[[
-USAGE:
--- Play animation by ID
+USAGE WITH TRIMMING:
+
+-- Regular animation
 getgenv().Animator6D(1234567890, 1, true)
 
--- Play animation by instance
-local anim = game:GetObjects("rbxassetid://ID")[1]
-getgenv().Animator6D(anim, 1, true)
+-- Trimmed animation (0.5s to 3.5s)
+getgenv().Animator6DTrim(1234567890, 0.5, 3.5, 1, true)
 
--- Stop animation
-getgenv().Animator6DStop()
+-- Or using extended parameters
+getgenv().Animator6D(1234567890, 1, true, 0.5, 3.5)
 
--- Get current rig type
-print(getgenv().Animator6DGetRigType())
+-- Analyze an animation
+getgenv().Animator6DAnalyze(1234567890)
 
--- Change animation speed
-getgenv().Animator6DSetSpeed(2)
+-- Your specific animation with trimming
+getgenv().Animator6DTrim(75190685223546, 0, 2.5, 1, false)  -- First part only
+getgenv().Animator6DTrim(75190685223546, 2.5, 4.8, 1, false) -- Middle part
 ]]
