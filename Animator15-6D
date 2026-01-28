@@ -1,8 +1,7 @@
 --//====================================================\\--
---||                Animator6D Pro V4 (R6)             ||--
---||  Author: gObl00x + GPT-5                         ||--
---||  Features: universal rig, local cache, safe play  ||--
---||       With Physics-Based Accessory Throwing       ||--
+--||           Animator6D Pro V5 (Universal)           ||--
+--||  Author: gObl00x + GPT-5 + R15 Adaptation        ||--
+--||  Features: R6/R15 auto-detection, universal rig   ||--
 --\\====================================================//--
 
 if getgenv().Animator6DLoadedPro then return end
@@ -10,687 +9,396 @@ getgenv().Animator6DLoadedPro = true
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
 local hum = character:WaitForChild("Humanoid")
 
+-- ========== RIG TYPE DETECTION ==========
+local function GetRigType()
+    if hum.RigType == Enum.HumanoidRigType.R6 then
+        return "R6"
+    elseif hum.RigType == Enum.HumanoidRigType.R15 then
+        return "R15"
+    end
+    -- Fallback detection
+    if character:FindFirstChild("UpperTorso") then
+        return "R15"
+    else
+        return "R6"
+    end
+end
+
+local RIG_TYPE = GetRigType()
+warn("[Animator6D] Detected rig type:", RIG_TYPE)
+
 -- ========== LOCAL CACHE / 403 EVASION ==========
 local LocalAssetCache = {}
 local fullModel = nil
 pcall(function()
-	fullModel = game:GetObjects("rbxassetid://107495486817639")[1]
-	if fullModel then
-		fullModel.Parent = workspace
-	end
+    fullModel = game:GetObjects("rbxassetid://107495486817639")[1]
+    if fullModel then
+        fullModel.Parent = workspace
+    end
 end)
 
 local function LoadLocalAsset(id)
-	id = tostring(id):gsub("^rbxassetid://", "")
-	if LocalAssetCache[id] then
-		return LocalAssetCache[id]
-	end
+    id = tostring(id):gsub("^rbxassetid://", "")
+    if LocalAssetCache[id] then
+        return LocalAssetCache[id]
+    end
 
-	local found = fullModel and fullModel:FindFirstChild(id, true)
-	if found then
-		LocalAssetCache[id] = found
-		warn("[Animator6D] ✅ Loaded from local cache:", id)
-		return found
-	end
+    local found = fullModel and fullModel:FindFirstChild(id, true)
+    if found then
+        LocalAssetCache[id] = found
+        warn("[Animator6D] ✅ Loaded from local cache:", id)
+        return found
+    end
 
-	local ok, obj = pcall(function()
-		return game:GetObjects("rbxassetid://" .. id)[1]
-	end)
-	if ok and obj then
-		LocalAssetCache[id] = obj
-		warn("[Animator6D] ✅ Loaded via GetObjects👍👍:", id)
-		return obj
-	end
+    local ok, obj = pcall(function()
+        return game:GetObjects("rbxassetid://" .. id)[1]
+    end)
+    if ok and obj then
+        LocalAssetCache[id] = obj
+        warn("[Animator6D] ✅ Loaded via GetObjects:", id)
+        return obj
+    end
 
-	warn("[Animator6D] ts is bad, failed to load animation:", id)
-	return nil
+    warn("[Animator6D] Failed to load animation:", id)
+    return nil
 end
 -- ===============================================
 
-local R6Map = {
-	["Head"] = "Neck",
-	["Torso"] = "RootJoint",
-	["Right Arm"] = "Right Shoulder",
-	["Left Arm"] = "Left Shoulder",
-	["Right Leg"] = "Right Hip",
-	["Left Leg"] = "Left Hip"
+-- ========== JOINT MAPPING (R6 & R15) ==========
+local R6JointMap = {
+    ["Head"] = "Neck",
+    ["Torso"] = "RootJoint",
+    ["Right Arm"] = "Right Shoulder",
+    ["Left Arm"] = "Left Shoulder",
+    ["Right Leg"] = "Right Hip",
+    ["Left Leg"] = "Left Hip"
 }
 
--- ========== PHYSICS SETTINGS ==========
-local PHYSICS = {
-	GRAVITY = Vector3.new(0, -196.2, 0), -- Roblox gravity
-	AIR_RESISTANCE = 0.1,
-	BOUNCE_ELASTICITY = 0.3,
-	THROW_FORCE_MULTIPLIER = 50,
-	MIN_THROW_FORCE = 10,
-	MAX_THROW_FORCE = 150
+local R15JointMap = {
+    -- Head/Neck
+    ["Head"] = "Neck",
+    
+    -- Torso/Spine
+    ["UpperTorso"] = "Waist",
+    ["LowerTorso"] = "RootJoint",
+    
+    -- Arms
+    ["RightUpperArm"] = "RightShoulder",
+    ["RightLowerArm"] = "RightElbow",
+    ["RightHand"] = "RightWrist",
+    
+    ["LeftUpperArm"] = "LeftShoulder",
+    ["LeftLowerArm"] = "LeftElbow",
+    ["LeftHand"] = "LeftWrist",
+    
+    -- Legs
+    ["RightUpperLeg"] = "RightHip",
+    ["RightLowerLeg"] = "RightKnee",
+    ["RightFoot"] = "RightAnkle",
+    
+    ["LeftUpperLeg"] = "LeftHip",
+    ["LeftLowerLeg"] = "LeftKnee",
+    ["LeftFoot"] = "LeftAnkle"
 }
 
--- ========== ACCESSORY TRACKING ==========
-local function GetAccessoryMotors(rig)
-	local accessories = {}
-	
-	-- Find all accessories (hats, gear, etc.)
-	for _, child in ipairs(rig:GetChildren()) do
-		if child:IsA("Accessory") then
-			local handle = child:FindFirstChild("Handle")
-			if handle then
-				-- Find which body part this attaches to
-				for _, attachment in ipairs(handle:GetChildren()) do
-					if attachment:IsA("Attachment") then
-						for partName, motorName in pairs(R6Map) do
-							local part = rig:FindFirstChild(partName)
-							if part then
-								local matchingAttachment = part:FindFirstChild(attachment.Name)
-								if matchingAttachment then
-									-- Calculate the offset from body part to accessory
-									local worldCF = handle.CFrame
-									local bodyWorldCF = part.CFrame * matchingAttachment.CFrame
-									local offset = bodyWorldCF:Inverse() * worldCF
-									
-									accessories[child.Name] = {
-										Accessory = child,
-										Handle = handle,
-										BodyPart = part,
-										BodyAttachment = matchingAttachment,
-										BodyMotor = rig:FindFirstChild(motorName),
-										Offset = offset,
-										OriginalCFrame = handle.CFrame,
-										OriginalOffset = offset,
-										Attachment = attachment,
-										OriginalParent = handle.Parent,
-										IsThrown = false,
-										ThrowVelocity = Vector3.new(),
-										AngularVelocity = Vector3.new(),
-										ThrowTime = 0
-									}
-									break
-								end
-							end
-						end
-					end
-				end
-			end
-		end
-	end
-	
-	return accessories
+-- Special handling for R15 accessories
+local R15AccessoryMap = {
+    ["Hat"] = "HatAttachment",
+    ["Hair"] = "HairAttachment",
+    ["Face"] = "FaceFrontAttachment"
+}
+
+local function GetJointMap()
+    return RIG_TYPE == "R6" and R6JointMap or R15JointMap
 end
 
--- ========== THROWABLE PHYSICS OBJECT ==========
-local ThrowableObject = {}
-ThrowableObject.__index = ThrowableObject
-
-function ThrowableObject.new(accessoryData, throwCFrame, velocity, angularVelocity)
-	local self = setmetatable({}, ThrowableObject)
-	
-	self.Accessory = accessoryData.Accessory
-	self.Handle = accessoryData.Handle
-	self.OriginalParent = accessoryData.OriginalParent
-	self.BodyPart = accessoryData.BodyPart
-	self.BodyAttachment = accessoryData.BodyAttachment
-	
-	-- Physics properties
-	self.Position = throwCFrame.Position
-	self.Velocity = velocity
-	self.AngularVelocity = angularVelocity or Vector3.new(math.random(-10, 10), math.random(-10, 10), math.random(-10, 10))
-	
-	-- Rotation state
-	self.Rotation = throwCFrame - throwCFrame.Position
-	self.LastUpdate = tick()
-	
-	-- Enable physics on the handle
-	pcall(function()
-		-- Clone to avoid modifying original accessory
-		local clone = self.Handle:Clone()
-		clone.CFrame = throwCFrame
-		clone.Parent = Workspace
-		
-		-- Add physics properties
-		local bodyForce = Instance.new("BodyForce")
-		bodyForce.Force = PHYSICS.GRAVITY * clone:GetMass()
-		bodyForce.Parent = clone
-		
-		local bodyGyro = Instance.new("BodyGyro")
-		bodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-		bodyGyro.P = 1000
-		bodyGyro.D = 100
-		bodyGyro.Parent = clone
-		
-		local bodyVelocity = Instance.new("BodyVelocity")
-		bodyVelocity.Velocity = velocity
-		bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-		bodyVelocity.P = 1000
-		bodyVelocity.Parent = clone
-		
-		-- Store physics objects
-		self.PhysicsHandle = clone
-		self.BodyForce = bodyForce
-		self.BodyGyro = bodyGyro
-		self.BodyVelocity = bodyVelocity
-		
-		-- Make original invisible
-		self.Handle.Transparency = 1
-	end)
-	
-	return self
-end
-
-function ThrowableObject:Update(dt)
-	if not self.PhysicsHandle then return end
-	
-	-- Apply air resistance
-	self.Velocity = self.Velocity * (1 - PHYSICS.AIR_RESISTANCE * dt)
-	
-	-- Apply gravity
-	self.Velocity = self.Velocity + PHYSICS.GRAVITY * dt
-	
-	-- Update position
-	self.Position = self.Position + self.Velocity * dt
-	
-	-- Update rotation
-	local rotAmount = self.AngularVelocity * dt
-	self.Rotation = self.Rotation * CFrame.Angles(
-		math.rad(rotAmount.X),
-		math.rad(rotAmount.Y),
-		math.rad(rotAmount.Z)
-	)
-	
-	-- Apply to physics object
-	self.BodyVelocity.Velocity = self.Velocity
-	
-	-- Create target CFrame for BodyGyro
-	local targetCFrame = CFrame.new(self.Position) * self.Rotation
-	self.BodyGyro.CFrame = targetCFrame
-	
-	-- Check for collision with ground or return after timeout
-	if tick() - self.LastUpdate > 10 then -- 10 second timeout
-		self:Destroy()
-		return false
-	end
-	
-	return true
-end
-
-function ThrowableObject:Destroy()
-	if self.PhysicsHandle then
-		self.PhysicsHandle:Destroy()
-	end
-	if self.Handle then
-		self.Handle.Transparency = 0
-		self.Handle.Parent = self.OriginalParent
-		
-		-- Reattach to body
-		if self.BodyPart and self.BodyAttachment then
-			-- Find the attachment on the handle
-			for _, att in ipairs(self.Handle:GetChildren()) do
-				if att:IsA("Attachment") and att.Name == self.BodyAttachment.Name then
-					self.Handle.CFrame = self.BodyPart.CFrame * self.BodyAttachment.CFrame
-					break
-				end
-			end
-		end
-	end
-end
-
--- ========== KEYFRAME PARSER  ==========
+-- ========== KEYFRAME PARSER ==========
 local function ConvertToTable(kfs)
-	if not (kfs and typeof(kfs) == "Instance" and kfs:IsA("KeyframeSequence")) then
-		if typeof(kfs) == "Instance" then
-			for _, obj in ipairs(kfs:GetDescendants()) do
-				if obj:IsA("KeyframeSequence") then
-					kfs = obj
-					break
-				end
-			end
-		end
-	end
+    if not (kfs and typeof(kfs) == "Instance" and kfs:IsA("KeyframeSequence")) then
+        if typeof(kfs) == "Instance" then
+            for _, obj in ipairs(kfs:GetDescendants()) do
+                if obj:IsA("KeyframeSequence") then
+                    kfs = obj
+                    break
+                end
+            end
+        end
+    end
 
-	assert(kfs and typeof(kfs) == "Instance" and kfs:IsA("KeyframeSequence"), "Expected KeyframeSequence")
+    assert(kfs and typeof(kfs) == "Instance" and kfs:IsA("KeyframeSequence"), "Expected KeyframeSequence")
 
-	local seq = {}
-	for _, frame in ipairs(kfs:GetKeyframes()) do
-		local entry = { Time = frame.Time, Data = {} }
-		for _, pose in ipairs(frame:GetDescendants()) do
-			if pose:IsA("Pose") and pose.Weight > 0 then
-				entry.Data[pose.Name] = { CFrame = pose.CFrame }
-			end
-		end
-		table.insert(seq, entry)
-	end
-	table.sort(seq, function(a, b) return a.Time < b.Time end)
-	return seq, kfs.Loop
+    local seq = {}
+    for _, frame in ipairs(kfs:GetKeyframes()) do
+        local entry = { Time = frame.Time, Data = {} }
+        for _, pose in ipairs(frame:GetDescendants()) do
+            if pose:IsA("Pose") and pose.Weight > 0 then
+                -- Handle both regular poses and accessory poses
+                local poseName = pose.Name
+                if pose:IsA("AttachmentPose") then
+                    -- For R15 accessory poses, map to the correct attachment
+                    if R15AccessoryMap[poseName] then
+                        poseName = R15AccessoryMap[poseName]
+                    end
+                end
+                entry.Data[poseName] = { CFrame = pose.CFrame }
+            end
+        end
+        table.insert(seq, entry)
+    end
+    table.sort(seq, function(a, b) return a.Time < b.Time end)
+    return seq, kfs.Loop
 end
 
 -- ========== MOTOR MAP ==========
 local function BuildMotorMap(rig)
-	local map, lower = {}, {}
-	for _, m in ipairs(rig:GetDescendants()) do
-		if m:IsA("Motor6D") then
-			map[m.Name] = m
-			lower[string.lower(m.Name)] = m
-		end
-	end
-	return map, lower
+    local map, lower, allMotors = {}, {}, {}
+    
+    -- Collect all Motor6D joints
+    for _, m in ipairs(rig:GetDescendants()) do
+        if m:IsA("Motor6D") then
+            map[m.Name] = m
+            lower[string.lower(m.Name)] = m
+            table.insert(allMotors, m)
+        end
+    end
+    
+    -- For R15, also handle accessories and their attachments
+    if RIG_TYPE == "R15" then
+        for _, accessory in ipairs(rig:GetDescendants()) do
+            if accessory:IsA("Accessory") then
+                local handle = accessory:FindFirstChild("Handle")
+                if handle then
+                    for _, attachment in ipairs(handle:GetDescendants()) do
+                        if attachment:IsA("Attachment") then
+                            map[attachment.Name] = attachment
+                            lower[string.lower(attachment.Name)] = attachment
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    return map, lower, allMotors
 end
 
 local function FindMotor(poseName, map, lower)
-	local match = R6Map[poseName] or poseName
-	return map[match] or lower[string.lower(match)]
+    local jointMap = GetJointMap()
+    local match = jointMap[poseName] or poseName
+    
+    -- Try direct map first
+    local motor = map[match] or lower[string.lower(match)]
+    
+    -- If not found, try some common variations
+    if not motor and RIG_TYPE == "R15" then
+        -- Handle R15 part name variations
+        local variations = {
+            [poseName .. "RigAttachment"] = poseName,
+            [poseName .. "Attachment"] = poseName,
+            [poseName:gsub(" ", "")] = poseName
+        }
+        
+        for variation in pairs(variations) do
+            motor = map[variation] or lower[string.lower(variation)]
+            if motor then break end
+        end
+    end
+    
+    return motor
 end
 
--- ========== ANIM PLAYER WITH THROWING ==========
+-- ========== ANIM PLAYER ==========
 local AnimPlayer = {}
 AnimPlayer.__index = AnimPlayer
 
 function AnimPlayer.new(rig, kfs)
-	local self = setmetatable({}, AnimPlayer)
-	self.rig = rig
-	self.seq, self.looped = ConvertToTable(kfs)
-	self.map, self.lower = BuildMotorMap(rig)
-	
-	-- Track accessories
-	self.accessories = GetAccessoryMotors(rig)
-	
-	-- Throwable objects
-	self.throwables = {}
-	self.nextThrowTime = {}
-	
-	self.time, self.playing = 0, false
-	self.length = self.seq[#self.seq].Time
-	self.speed = 1
-	self.savedC0 = {}
-	self.savedAccessoryOffsets = {}
-	
-	-- Save original motor positions
-	for _, m in pairs(self.map) do
-		self.savedC0[m] = m.C0
-	end
-	
-	-- Save original accessory positions
-	for name, data in pairs(self.accessories) do
-		self.savedAccessoryOffsets[name] = data.Offset
-		data.OriginalCFrame = data.Handle.CFrame
-		data.OriginalParent = data.Handle.Parent
-	end
-	
-	return self
-end
-
-function AnimPlayer:ThrowAccessory(accessoryName, throwPower, throwAngle, spinSpeed)
-	if not self.accessories[accessoryName] then
-		warn("[Animator6D] Accessory not found:", accessoryName)
-		return
-	end
-	
-	local accessoryData = self.accessories[accessoryName]
-	
-	-- Prevent rapid throwing
-	if self.nextThrowTime[accessoryName] and tick() < self.nextThrowTime[accessoryName] then
-		return
-	end
-	self.nextThrowTime[accessoryName] = tick() + 1 -- 1 second cooldown
-	
-	-- Calculate throw parameters
-	throwPower = math.clamp(throwPower or 1, 0, 1)
-	throwAngle = throwAngle or 45 -- degrees
-	spinSpeed = spinSpeed or 10
-	
-	-- Get throw position (from character's head or hand)
-	local throwOrigin = character.Head.Position + character.Head.CFrame.LookVector * 2
-	if accessoryData.BodyPart.Name:find("Arm") then
-		throwOrigin = accessoryData.BodyPart.Position + accessoryData.BodyPart.CFrame.LookVector * 2
-	end
-	
-	-- Calculate throw direction (forward and upward)
-	local direction = character.Head.CFrame.LookVector
-	local upVector = Vector3.new(0, 1, 0)
-	
-	-- Apply throw angle
-	local radAngle = math.rad(throwAngle)
-	local horizontalForce = direction * math.cos(radAngle)
-	local verticalForce = upVector * math.sin(radAngle)
-	
-	-- Calculate velocity
-	local forceMultiplier = PHYSICS.MIN_THROW_FORCE + 
-		(PHYSICS.MAX_THROW_FORCE - PHYSICS.MIN_THROW_FORCE) * throwPower
-	
-	local velocity = (horizontalForce + verticalForce) * forceMultiplier
-	
-	-- Add character's current velocity
-	local characterVelocity = hum.RootPart.Velocity or Vector3.new()
-	velocity = velocity + characterVelocity * 0.5
-	
-	-- Create throwable object
-	local throwCFrame = CFrame.new(throwOrigin) * CFrame.Angles(math.rad(math.random(360)), 0, 0)
-	local angularVelocity = Vector3.new(
-		math.random(-spinSpeed, spinSpeed),
-		math.random(-spinSpeed, spinSpeed),
-		math.random(-spinSpeed, spinSpeed)
-	)
-	
-	local throwable = ThrowableObject.new(accessoryData, throwCFrame, velocity, angularVelocity)
-	table.insert(self.throwables, throwable)
-	
-	-- Mark accessory as thrown
-	accessoryData.IsThrown = true
-	accessoryData.ThrowTime = tick()
-	
-	warn("[Animator6D] Threw accessory:", accessoryName, "Power:", throwPower)
-	
-	return true
-end
-
-function AnimPlayer:RecallAccessory(accessoryName)
-	if not self.accessories[accessoryName] then return end
-	
-	local accessoryData = self.accessories[accessoryName]
-	
-	-- Find and destroy any throwable for this accessory
-	for i = #self.throwables, 1, -1 do
-		local throwable = self.throwables[i]
-		if throwable.Accessory.Name == accessoryName then
-			throwable:Destroy()
-			table.remove(self.throwables, i)
-			
-			-- Reset accessory state
-			accessoryData.IsThrown = false
-			return true
-		end
-	end
-	
-	return false
-end
-
-function AnimPlayer:UpdateThrowables(dt)
-	-- Update all thrown accessories
-	for i = #self.throwables, 1, -1 do
-		local throwable = self.throwables[i]
-		if not throwable:Update(dt) then
-			table.remove(self.throwables, i)
-			
-			-- Reset the original accessory
-			local accessoryData = self.accessories[throwable.Accessory.Name]
-			if accessoryData then
-				accessoryData.IsThrown = false
-			end
-		end
-	end
-end
-
-function AnimPlayer:ApplyPose(poseData)
-	-- Apply to motors
-	for joint, data in pairs(poseData) do
-		local motor = FindMotor(joint, self.map, self.lower)
-		if motor then
-			pcall(function()
-				motor.C0 = self.savedC0[motor] * data.CFrame
-			end)
-		end
-	end
-	
-	-- Update non-thrown accessories
-	for name, data in pairs(self.accessories) do
-		if not data.IsThrown then
-			pcall(function()
-				if data.BodyPart and data.BodyAttachment then
-					data.Handle.CFrame = data.BodyPart.CFrame * data.BodyAttachment.CFrame
-				end
-			end)
-		end
-	end
+    local self = setmetatable({}, AnimPlayer)
+    self.rig = rig
+    self.seq, self.looped = ConvertToTable(kfs)
+    self.map, self.lower, self.allMotors = BuildMotorMap(rig)
+    self.time, self.playing = 0, false
+    self.length = self.seq[#self.seq].Time
+    self.speed = 1
+    self.savedC0 = {}
+    self.savedTransforms = {}
+    
+    -- Save original transforms for all motors
+    for _, motor in ipairs(self.allMotors) do
+        self.savedC0[motor] = motor.C0
+        self.savedTransforms[motor] = motor.Transform
+    end
+    
+    return self
 end
 
 function AnimPlayer:Play(speed, loop)
-	if self.playing then return end
-	self.playing, self.speed = true, speed or 1
-	self.looped = (loop == nil) and true or loop
+    if self.playing then return end
+    self.playing, self.speed = true, speed or 1
+    self.looped = (loop == nil) and true or loop
 
-	self.conn = RunService.Heartbeat:Connect(function(dt)
-		if not self.playing then return end
-		self.time += dt * self.speed
+    self.conn = RunService.Heartbeat:Connect(function(dt)
+        if not self.playing then return end
+        self.time += dt * self.speed
 
-		if self.time > self.length then
-			if self.looped then
-				self.time -= self.length
-			else
-				self:Stop(true)
-				return
-			end
-		end
+        if self.time > self.length then
+            if self.looped then
+                self.time -= self.length
+            else
+                self:Stop(true)
+                return
+            end
+        end
 
-		local prev = self.seq[1]
-		for i = 1, #self.seq do
-			if self.seq[i].Time <= self.time then
-				prev = self.seq[i]
-			else
-				break
-			end
-		end
+        -- Find current keyframe
+        local currentFrame = self.seq[1]
+        for i = 1, #self.seq do
+            if self.seq[i].Time <= self.time then
+                currentFrame = self.seq[i]
+            else
+                break
+            end
+        end
 
-		-- Apply pose
-		self:ApplyPose(prev.Data)
-		
-		-- Update thrown accessories
-		self:UpdateThrowables(dt)
-	end)
+        -- Apply poses
+        for joint, data in pairs(currentFrame.Data) do
+            local motor = FindMotor(joint, self.map, self.lower)
+            if motor then
+                pcall(function()
+                    if motor:IsA("Motor6D") then
+                        motor.C0 = self.savedC0[motor] * data.CFrame
+                    elseif motor:IsA("Attachment") and RIG_TYPE == "R15" then
+                        -- Handle R15 accessory attachments
+                        motor.WorldCFrame = data.CFrame
+                    end
+                end)
+            end
+        end
+    end)
 end
 
 function AnimPlayer:Stop(restore)
-	self.playing = false
-	if self.conn then self.conn:Disconnect() self.conn = nil end
-	
-	-- Recall all thrown accessories
-	for name, data in pairs(self.accessories) do
-		if data.IsThrown then
-			self:RecallAccessory(name)
-		end
-	end
-	
-	if restore then
-		-- Restore original motor positions
-		for motor, origC0 in pairs(self.savedC0) do
-			pcall(function() motor.C0 = origC0 end)
-		end
-		
-		-- Restore original accessory positions
-		for name, data in pairs(self.accessories) do
-			pcall(function() 
-				if data.OriginalCFrame then
-					data.Handle.CFrame = data.OriginalCFrame
-				end
-				data.Handle.Transparency = 0
-				data.Handle.Parent = data.OriginalParent
-			end)
-			data.IsThrown = false
-		end
-	else
-		-- Reset to default
-		for _, m in pairs(self.map) do
-			pcall(function() m.Transform = CFrame.new() end)
-		end
-		for name, data in pairs(self.accessories) do
-			pcall(function() 
-				if data.BodyPart and data.BodyAttachment then
-					data.Handle.CFrame = data.BodyPart.CFrame * data.BodyAttachment.CFrame
-				end
-				data.Handle.Transparency = 0
-			end)
-			data.IsThrown = false
-		end
-	end
+    self.playing = false
+    if self.conn then self.conn:Disconnect() self.conn = nil end
+    
+    if restore then
+        -- Restore original C0 values
+        for motor, origC0 in pairs(self.savedC0) do
+            pcall(function() 
+                if motor:IsA("Motor6D") then
+                    motor.C0 = origC0 
+                end
+            end)
+        end
+    else
+        -- Reset transforms to identity
+        for motor, origTransform in pairs(self.savedTransforms) do
+            pcall(function() 
+                if motor:IsA("Motor6D") then
+                    motor.Transform = CFrame.new() 
+                end
+            end)
+        end
+    end
 end
 
 -- ========== DISABLE DEFAULT ANIMS ==========
 local function disableDefaultAnimations(char)
-	if not hum then return end
-	for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
-		track:Stop(0)
-	end
-	local animScript = char:FindFirstChild("Animate")
-	if animScript then animScript.Disabled = true end
-	local animator = hum:FindFirstChildOfClass("Animator")
-	if animator then animator:Destroy() end
+    if not hum then return end
+    for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
+        track:Stop(0)
+    end
+    local animScript = char:FindFirstChild("Animate")
+    if animScript then animScript.Disabled = true end
+    local animator = hum:FindFirstChildOfClass("Animator")
+    if animator then animator:Destroy() end
 end
+
+-- ========== CHARACTER REINIT ON RESPAWN ==========
+player.CharacterAdded:Connect(function(newChar)
+    character = newChar
+    hum = character:WaitForChild("Humanoid")
+    RIG_TYPE = GetRigType()
+    warn("[Animator6D] Character respawned, rig type:", RIG_TYPE)
+end)
 
 -- ========== GLOBAL INTERFACE ==========
 getgenv().Animator6D = function(idOrInstance, speed, looped)
-	local kfs
-	if typeof(idOrInstance) == "Instance" then
-		kfs = idOrInstance:IsA("KeyframeSequence") and idOrInstance or idOrInstance:FindFirstChildOfClass("KeyframeSequence")
-	else
-		local asset = LoadLocalAsset(idOrInstance)
-		if asset then
-			kfs = asset:FindFirstChildOfClass("KeyframeSequence") or asset
-		end
-	end
+    local kfs
+    if typeof(idOrInstance) == "Instance" then
+        kfs = idOrInstance:IsA("KeyframeSequence") and idOrInstance or idOrInstance:FindFirstChildOfClass("KeyframeSequence")
+    else
+        local asset = LoadLocalAsset(idOrInstance)
+        if asset then
+            kfs = asset:FindFirstChildOfClass("KeyframeSequence") or asset
+        end
+    end
 
-	if not kfs then
-		warn("[Animator6D] yo sorry could not load animation:", idOrInstance)
-		return
-	end
+    if not kfs then
+        warn("[Animator6D] Could not load animation:", idOrInstance)
+        return
+    end
 
-	disableDefaultAnimations(character)
+    disableDefaultAnimations(character)
 
-	if getgenv().currentAnimator6D then
-		pcall(function()
-			getgenv().currentAnimator6D:Stop(true)
-		end)
-	end
+    if getgenv().currentAnimator6D then
+        pcall(function()
+            getgenv().currentAnimator6D:Stop(true)
+        end)
+    end
 
-	local anim = AnimPlayer.new(character, kfs)
-	getgenv().currentAnimator6D = anim
-	anim:Play(speed or 1, looped)
+    local anim = AnimPlayer.new(character, kfs)
+    getgenv().currentAnimator6D = anim
+    anim:Play(speed or 1, looped)
 end
 
 getgenv().Animator6DStop = function()
-	if getgenv().currentAnimator6D then
-		pcall(function() getgenv().currentAnimator6D:Stop(true) end)
-		getgenv().currentAnimator6D = nil
-	end
+    if getgenv().currentAnimator6D then
+        pcall(function() getgenv().currentAnimator6D:Stop(true) end)
+        getgenv().currentAnimator6D = nil
+    end
 end
 
--- ========== THROWING CONTROLS ==========
-getgenv().Animator6DThrow = function(accessoryName, throwPower, throwAngle, spinSpeed)
-	if not getgenv().currentAnimator6D then
-		warn("[Animator6D] No animation playing")
-		return false
-	end
-	
-	return getgenv().currentAnimator6D:ThrowAccessory(
-		accessoryName, 
-		throwPower or 0.5, 
-		throwAngle or 45, 
-		spinSpeed or 10
-	)
+-- ========== UTILITY FUNCTIONS ==========
+getgenv().Animator6DGetRigType = function()
+    return RIG_TYPE
 end
 
-getgenv().Animator6DRecall = function(accessoryName)
-	if not getgenv().currentAnimator6D then
-		warn("[Animator6D] No animation playing")
-		return false
-	end
-	
-	return getgenv().currentAnimator6D:RecallAccessory(accessoryName)
-end
-
-getgenv().Animator6DThrowAll = function(throwPower, throwAngle, spinSpeed)
-	if not getgenv().currentAnimator6D then
-		warn("[Animator6D] No animation playing")
-		return 0
-	end
-	
-	local count = 0
-	for accessoryName in pairs(getgenv().currentAnimator6D.accessories) do
-		if getgenv().currentAnimator6D:ThrowAccessory(accessoryName, throwPower, throwAngle, spinSpeed) then
-			count = count + 1
-		end
-	end
-	
-	return count
-end
-
-getgenv().Animator6DRecallAll = function()
-	if not getgenv().currentAnimator6D then return 0 end
-	
-	local count = 0
-	for accessoryName in pairs(getgenv().currentAnimator6D.accessories) do
-		if getgenv().currentAnimator6D:RecallAccessory(accessoryName) then
-			count = count + 1
-		end
-	end
-	
-	return count
+getgenv().Animator6DSetSpeed = function(speed)
+    if getgenv().currentAnimator6D then
+        getgenv().currentAnimator6D.speed = speed or 1
+    end
 end
 
 -- ========== NOTIFY ==========
-warn("[Animator6D Pro V4] ya.. Allah hotbar - With Physics-Based Throwing!")
+warn("[Animator6D Pro V5] Universal R6/R15 Loaded!")
 pcall(function()
-	game:GetService("StarterGui"):SetCore("SendNotification", {
-		Title = "Animator6D Pro V4",
-		Text = "Loaded with Physics-Based Accessory Throwing!",
-		Duration = 5
-	})
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "Animator6D Pro V5",
+        Text = "Universal R6/R15 Support Enabled!",
+        Duration = 5
+    })
 end)
 
---
 --[[
-INSTRUCTIONS:
-
-Basic animation:
+USAGE:
+-- Play animation by ID
 getgenv().Animator6D(1234567890, 1, true)
 
-Throw a specific accessory (like throwing a football):
-getgenv().Animator6DThrow("Hat", 0.8, 45, 15)
--- Parameters: accessoryName, throwPower (0-1), throwAngle (degrees), spinSpeed
+-- Play animation by instance
+local anim = game:GetObjects("rbxassetid://ID")[1]
+getgenv().Animator6D(anim, 1, true)
 
-Throw all accessories at once:
-getgenv().Animator6DThrowAll(0.7, 30, 10)
-
-Recall a thrown accessory (makes it return to your character):
-getgenv().Animator6DRecall("Hat")
-
-Recall all thrown accessories:
-getgenv().Animator6DRecallAll()
-
-Stop all animations (automatically recalls all accessories):
+-- Stop animation
 getgenv().Animator6DStop()
 
-PARAMETER EXPLANATION:
-1. throwPower (0-1): 
-   - 0.3 = gentle toss
-   - 0.7 = strong throw  
-   - 1.0 = maximum power
+-- Get current rig type
+print(getgenv().Animator6DGetRigType())
 
-2. throwAngle (degrees):
-   - 30 = low arc (like a line drive)
-   - 45 = optimal arc (like a football pass)
-   - 60 = high arc (like a lob)
-
-3. spinSpeed:
-   - 5 = slow spin
-   - 15 = medium spin
-   - 30 = fast spin (like a bullet)
-
-EXAMPLE USAGE:
--- Do a cool animation
-getgenv().Animator6D(1234567890, 1, true)
-
--- During animation, throw your hat like a football
-getgenv().Animator6DThrow("Hat", 0.8, 45, 20)
-
--- Throw your knife with maximum power
-getgenv().Animator6DThrow("Knife", 1.0, 30, 25)
-
--- Recall your hat back
-getgenv().Animator6DRecall("Hat")
-
--- Go crazy and throw everything!
-getgenv().Animator6DThrowAll(0.9, 60, 15)
---]]
+-- Change animation speed
+getgenv().Animator6DSetSpeed(2)
+]]
