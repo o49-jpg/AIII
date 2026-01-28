@@ -417,55 +417,103 @@ getgenv().Animator6DTrim = function(idOrInstance, startTime, endTime, speed, loo
     return getgenv().Animator6D(idOrInstance, speed or 1, looped == nil and true or looped, startTime, endTime)
 end
 
--- Animation analyzer
-getgenv().Animator6DAnalyze = function(idOrInstance)
-    local kfs
-    if typeof(idOrInstance) == "Instance" then
-        kfs = idOrInstance:IsA("KeyframeSequence") and idOrInstance or idOrInstance:FindFirstChildOfClass("KeyframeSequence")
-    else
-        local asset = LoadLocalAsset(idOrInstance)
-        if asset then
-            kfs = asset:FindFirstChildOfClass("KeyframeSequence") or asset
+-- Fixed AnalyzeAnimation function:
+local function AnalyzeAnimation(kfs)
+    local frames = kfs:GetKeyframes()
+    local info = {
+        frameCount = #frames,
+        totalDuration = frames[#frames] and frames[#frames].Time or 0,
+        frames = {}
+    }
+    
+    for i, frame in ipairs(frames) do
+        -- CORRECT WAY: Count actual child poses
+        local poseCount = 0
+        for _, child in ipairs(frame:GetChildren()) do
+            if child:IsA("Pose") or child:IsA("AttachmentPose") then
+                poseCount = poseCount + 1
+            end
         end
-    end
-    
-    if not kfs then
-        warn("[Animator6D] Could not load animation for analysis")
-        return
-    end
-    
-    local info = AnalyzeAnimation(kfs)
-    
-    print("=== Animation Analysis ===")
-    print("Total frames:", info.frameCount)
-    print("Total duration:", info.totalDuration .. "s")
-    print("\nFrame breakdown:")
-    
-    for i, frame in ipairs(info.frames) do
-        print(string.format("  Frame %d: %.3fs - %d poses", i, frame.time, frame.poseCount))
-    end
-    
-    -- Find gaps
-    local gaps = {}
-    for i = 2, #info.frames do
-        local gap = info.frames[i].time - info.frames[i-1].time
-        if gap > 0.5 then
-            table.insert(gaps, {
-                from = info.frames[i-1].time,
-                to = info.frames[i].time,
-                duration = gap
-            })
-        end
-    end
-    
-    if #gaps > 0 then
-        print("\nPotential branch points (gaps > 0.5s):")
-        for i, gap in ipairs(gaps) do
-            print(string.format("  Gap %d: %.3fs to %.3fs (%.3fs gap)", i, gap.from, gap.to, gap.duration))
-        end
+        
+        table.insert(info.frames, {
+            time = frame.Time,
+            poseCount = poseCount,
+            hasPoses = poseCount > 0
+        })
     end
     
     return info
+end
+
+-- Also, in the ConvertToTable function, we need to fix how we check for frames with poses:
+local function ConvertToTable(kfs, startTime, endTime)
+    if not (kfs and typeof(kfs) == "Instance" and kfs:IsA("KeyframeSequence")) then
+        if typeof(kfs) == "Instance" then
+            for _, obj in ipairs(kfs:GetDescendants()) do
+                if obj:IsA("KeyframeSequence") then
+                    kfs = obj
+                    break
+                end
+            end
+        end
+    end
+
+    assert(kfs and typeof(kfs) == "Instance" and kfs:IsA("KeyframeSequence"), "Expected KeyframeSequence")
+
+    local seq = {}
+    local frames = kfs:GetKeyframes()
+    
+    for _, frame in ipairs(frames) do
+        -- Skip frames outside trim range
+        if startTime and frame.Time < startTime then
+            continue
+        end
+        if endTime and frame.Time > endTime then
+            continue
+        end
+        
+        local entry = { 
+            Time = frame.Time,
+            OriginalTime = frame.Time,
+            Poses = {}
+        }
+        
+        -- Adjust time if startTime is specified
+        if startTime then
+            entry.Time = frame.Time - startTime
+        end
+        
+        -- CORRECT: Get poses from frame's children
+        for _, pose in ipairs(frame:GetChildren()) do
+            if pose:IsA("Pose") and pose.Weight > 0 then
+                entry.Poses[pose.Name] = { 
+                    CFrame = pose.CFrame,
+                    Weight = pose.Weight
+                }
+            end
+        end
+        
+        -- Also check for AttachmentPose
+        for _, pose in ipairs(frame:GetChildren()) do
+            if pose:IsA("AttachmentPose") and pose.Weight > 0 then
+                entry.Poses[pose.Name] = { 
+                    CFrame = pose.CFrame,
+                    Weight = pose.Weight,
+                    IsAttachment = true
+                }
+            end
+        end
+        
+        table.insert(seq, entry)
+    end
+    
+    -- If trimmed and no frames at time 0, add a dummy frame
+    if startTime and startTime > 0 and (#seq == 0 or seq[1].Time > 0) then
+        table.insert(seq, 1, { Time = 0, Poses = {}, OriginalTime = startTime })
+    end
+    
+    table.sort(seq, function(a, b) return a.Time < b.Time end)
+    return seq, kfs.Loop
 end
 
 getgenv().Animator6DStop = function()
