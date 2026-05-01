@@ -1382,20 +1382,62 @@ def parsenconvert(path):
 			pass
 
 import sys
-def main(args):
-	print("RBXM To STEVE's KeyframeSequence file format")
-	print("Hello! I convert RBXM files to STEVE's KeyframeSequence file format.")
-	print("I also know about RBXMX, and I looooove C structs!")
-	if len(args) >= 2:
-		return parsenconvert(args[1])
-	print("Usage: rbxm2anim.py [path to rbxm]")
-	user_path = input("  or enter path here: ").strip()
-	if not user_path:
-		raise ValueError("No file path provided.")
-	return parsenconvert(user_path)
 
-if __name__ == "__main__":
-	try:
-		main(sys.argv)
-	except Exception as e:
-		print("Error:", e)
+def convert_directory(folder_path):
+    print("Scanning directory:", folder_path)
+
+    if not os.path.isdir(folder_path):
+        raise NotADirectoryError(f"Invalid directory: {folder_path}")
+
+    files = os.listdir(folder_path)
+    rbx_files = [f for f in files if f.lower().endswith((".rbxm", ".rbxmx"))]
+
+    if not rbx_files:
+        print("No RBXM/RBXMX files found.")
+        return
+
+    print(f"Found {len(rbx_files)} file(s).")
+
+    success = 0
+    failed = 0
+
+    for file in rbx_files:
+        full_path = os.path.join(folder_path, file)
+        print("\n---")
+        print("Processing:", file)
+
+        try:
+            parsenconvert(full_path)
+            success += 1
+        except Exception as e:
+            print("Failed:", e)
+            failed += 1
+
+    print("\nDone.")
+    print("Successful:", success)
+    print("Failed:", failed)
+
+def main(args):
+    print("RBXM To STEVE's KeyframeSequence file format")
+
+    if len(args) >= 2:
+        path = args[1]
+
+        if os.path.isdir(path):
+            return convert_directory(path)
+        else:
+            return parsenconvert(path)
+
+    print("Usage:")
+    print("  Single file: rbxm2anim.py file.rbxm")
+    print("  Folder:      rbxm2anim.py folder_path")
+
+    user_path = input("Enter file or folder path: ").strip()
+
+    if not user_path:
+        raise ValueError("No path provided.")
+
+    if os.path.isdir(user_path):
+        return convert_directory(user_path)
+    else:
+        return parsenconvert(user_path)
